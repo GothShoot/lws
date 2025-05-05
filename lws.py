@@ -18,7 +18,11 @@ import yaml
 import click
 import socket
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import sys
+from tqdm import tqdm
 
+# Global version information
+__version__ = '1.0.0'
 
 
 class JsonFormatter(logging.Formatter):
@@ -34,6 +38,7 @@ class JsonFormatter(logging.Formatter):
         if record.exc_info:
             log_record['exception'] = self.formatException(record.exc_info)
         return json.dumps(log_record)
+
 
 def setup_logging(log_level=logging.DEBUG, log_file=None, json_log_file=None):
     """
@@ -87,7 +92,7 @@ def setup_logging(log_level=logging.DEBUG, log_file=None, json_log_file=None):
         'handlers': handlers,
         'root': {
             'level': log_level,
-            'handlers': (handlers.keys()),
+            'handlers': list(handlers.keys()),
         },
     }
 
@@ -101,9 +106,49 @@ json_log_file_path = os.path.join(os.getcwd(), 'lws.json.log')  # JSON log file 
 # Set up logging: standard logging to console and file, JSON logging to a separate file
 setup_logging(log_level=logging.ERROR, log_file=log_file_path, json_log_file=json_log_file_path)
 
+
+def is_service_active(service_name):
+    """
+    Check if a service is active using systemctl.
+    
+    Parameters:
+    - service_name: Name of the service to check
+    
+    Returns:
+    - Boolean indicating if the service is active
+    """
+    try:
+        result = subprocess.run(
+            ["systemctl", "is-active", service_name],
+            stdout=subprocess.PIPE, 
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        return result.stdout.strip() == "active"
+    except Exception as e:
+        logging.error(f"Error checking if service {service_name} is active: {str(e)}")
+        return False
+
+
 # Load and validate the configuration
 def load_config():
+    """
+    Load and validate the configuration from config.yaml.
+    
+    Returns:
+    - Validated configuration dictionary
+    
+    Raises:
+    - FileNotFoundError: If config.yaml is not found
+    - yaml.YAMLError: If config.yaml has invalid YAML syntax
+    - ValueError: If configuration is invalid
+    """
     try:
+        config_path = os.path.join(os.getcwd(), 'config.yaml')
+        if not os.path.exists(config_path):
+            logging.error(f"❌ Configuration file not found at {config_path}")
+            raise FileNotFoundError(f"Configuration file not found at {config_path}")
+            
         with open('config.yaml', 'r') as file:
             config = yaml.safe_load(file)
         validate_config(config)
@@ -114,36 +159,111 @@ def load_config():
     except yaml.YAMLError as e:
         logging.error(f"❌ Error parsing configuration file: {e}")
         raise
+    except Exception as e:
+        logging.error(f"❌ Unexpected error loading configuration: {str(e)}")
+        raise
+
 
 def validate_config(config):
+    """
+    Validate the configuration structure and content.
+    
+    Parameters:
+    - config: Configuration dictionary to validate
+    
+    Raises:
+    - ValueError: If configuration is invalid
+    """
+    if not isinstance(config, dict):
+        error_msg = "Configuration must be a dictionary"
+        logging.error(f"❌ {error_msg}")
+        raise ValueError(error_msg)
+        
     required_keys = ['regions', 'instance_sizes']
     for key in required_keys:
         if key not in config:
-            logging.error(f"❌ Missing required configuration key: {key}")
-            raise ValueError(f"❌ Missing required configuration key: {key}")
+            error_msg = f"Missing required configuration key: {key}"
+            logging.error(f"❌ {error_msg}")
+            raise ValueError(error_msg)
 
     if not isinstance(config['regions'], dict) or not config['regions']:
-        logging.error("❌ Invalid or empty 'regions' configuration.")
-        raise ValueError("❌ Invalid or empty 'regions' configuration.")
+        error_msg = "Invalid or empty 'regions' configuration."
+        logging.error(f"❌ {error_msg}")
+        raise ValueError(error_msg)
 
     if not isinstance(config['instance_sizes'], dict) or not config['instance_sizes']:
-        logging.error("❌ Invalid or empty 'instance_sizes' configuration.")
-        raise ValueError("❌ Invalid or empty 'instance_sizes' configuration.")
+        error_msg = "Invalid or empty 'instance_sizes' configuration."
+        logging.error(f"❌ {error_msg}")
+        raise ValueError(error_msg)
+        
+    # Validate each region has az with proper host details
+    for region_name, region in config['regions'].items():
+        if 'availability_zones' not in region or not isinstance(region['availability_zones'], dict):
+            error_msg = f"Region '{region_name}' must have 'availability_zones' dictionary"
+            logging.error(f"❌ {error_msg}")
+            raise ValueError(error_msg)
+            
+        for az_name, az in region['availability_zones'].items():
+            required_az_keys = ['host', 'user', 'ssh_password']
+            for key in required_az_keys:
+                if key not in az:
+                    error_msg = f"Missing '{key}' for availability zone '{az_name}' in region '{region_name}'"
+                    logging.error(f"❌ {error_msg}")
+                    raise ValueError(error_msg)
 
-config = load_config()
+    # Validate instance sizes
+    for size_name, size_config in config['instance_sizes'].items():
+        required_size_keys = ['memory', 'cpulimit', 'storage']
+        for key in required_size_keys:
+            if key not in size_config:
+                error_msg = f"Missing '{key}' for instance size '{size_name}'"
+                logging.error(f"❌ {error_msg}")
+                raise ValueError(error_msg)
+
+
+try:
+    config = load_config()
+except (FileNotFoundError, yaml.YAMLError, ValueError) as e:
+    click.secho(f"Configuration error: {str(e)}", fg='red')
+    config = {
+        'regions': {},
+        'instance_sizes': {},
+        'use_local_only': False,
+        'default_storage': 'local',
+        'default_network': 'vmbr0'
+    }
+
 
 # lws
-@click.group()
+@click.group(context_settings={"help_option_names": ["-h", "--help"]})
+@click.version_option(version=__version__)
 def lws():
-    """🐧 linux (containers) web services"""
+    """🐧 Linux (Containers) Web Services - A CLI tool for managing LXC containers on Proxmox."""
     pass
 
+
 def run_ssh_command(host, user, ssh_password, command):
-    """Runs an SSH command on a remote host, with error handling and logging."""
-    ssh_cmd = ["sshpass", "-p", ssh_password, "ssh", f"{user}@{host}"] + command
+    """
+    Runs an SSH command on a remote host, with error handling and logging.
+    
+    Parameters:
+    - host: Remote host to connect to
+    - user: SSH username
+    - ssh_password: SSH password
+    - command: List containing the command and its arguments
+    
+    Returns:
+    - subprocess.CompletedProcess object with stdout and stderr
+    """
+    if not shutil.which('sshpass'):
+        error_msg = "sshpass command not found. Please install it with 'apt install sshpass' or equivalent."
+        logging.error(f"❌ {error_msg}")
+        raise RuntimeError(error_msg)
+        
+    ssh_cmd = ["sshpass", "-p", ssh_password, "ssh", "-o", "StrictHostKeyChecking=no", f"{user}@{host}"] + command
     
     # Construct a sanitized command for logging (hides the password)
-    sanitized_ssh_cmd = ["sshpass", "-p", "****", "ssh", f"{user}@{host}"] + command
+    sanitized_ssh_cmd = ["sshpass", "-p", "****", "ssh", "-o", "StrictHostKeyChecking=no", f"{user}@{host}"] + command
 
     try:
         # Log the sanitized command instead of the real command with the password
@@ -161,17 +281,36 @@ def run_ssh_command(host, user, ssh_password, command):
 
     except subprocess.CalledProcessError as e:
         # Log the error without showing the password
-
         logging.debug(f"❌ SSH command failed with return code {e.returncode}: {' '.join(sanitized_ssh_cmd)}")
         logging.debug(f"❌ Error output: {e.stderr}")
         return e
-
     except Exception as e:
         logging.error(f"❌ An unexpected error occurred while running SSH command: {str(e)}")
-        return None
+        # Create a dummy result with the error info
+        error_result = subprocess.CompletedProcess(
+            args=sanitized_ssh_cmd,
+            returncode=1,
+            stdout="",
+            stderr=f"Error: {str(e)}"
+        )
+        return error_result
+
 
 def execute_command(cmd, use_local_only, host_details=None):
-    """Executes a command locally or via SSH based on the configuration."""
+    """
+    Executes a command locally or via SSH based on the configuration.
+    
+    Parameters:
+    - cmd: Command list to execute
+    - use_local_only: Whether to execute locally only
+    - host_details: SSH connection details for remote execution
+    
+    Returns:
+    - subprocess.CompletedProcess object with command output
+    """
+    if not cmd:
+        raise ValueError("Command cannot be empty")
+        
     if use_local_only:
         logging.debug(f"🔎 Executing local command: {' '.join(cmd)}")
         try:
@@ -182,12 +321,35 @@ def execute_command(cmd, use_local_only, host_details=None):
         except subprocess.CalledProcessError as e:
             logging.error(f"❌ Local command failed: {e}")
             return e
+        except Exception as e:
+            logging.error(f"❌ Unexpected error executing local command: {str(e)}")
+            error_result = subprocess.CompletedProcess(
+                args=cmd,
+                returncode=1,
+                stdout="",
+                stderr=f"Error: {str(e)}"
+            )
+            return error_result
     else:
+        if not host_details:
+            raise ValueError("Host details are required for remote command execution")
         logging.debug(f"🔎 Executing remote command: {' '.join(cmd)} on {host_details['host']}")
         return run_ssh_command(host_details['host'], host_details['user'], host_details['ssh_password'], cmd)
 
+
 def run_proxmox_command(local_cmd, remote_cmd=None, use_local_only=False, host_details=None):
-    """Executes a Proxmox command either locally or remotely."""
+    """
+    Executes a Proxmox command either locally or remotely.
+    
+    Parameters:
+    - local_cmd: Command to execute locally
+    - remote_cmd: Command to execute remotely (if use_local_only is False)
+    - use_local_only: Whether to execute locally only
+    - host_details: SSH connection details for remote execution
+    
+    Returns:
+    - subprocess.CompletedProcess object with command output
+    """
     cmd = local_cmd if use_local_only else remote_cmd
     if cmd is None:
         raise ValueError("Command cannot be None.")
@@ -196,15 +358,43 @@ def run_proxmox_command(local_cmd, remote_cmd=None, use_local_only=False, host_d
 
 # Command alias decorator
 def command_alias(*aliases):
+    """
+    Decorator that creates command aliases for Click commands.
+    
+    Parameters:
+    - aliases: List of command name aliases
+    
+    Returns:
+    - Decorator function
+    """
     def decorator(f):
         for alias in aliases:
             lws.command(alias)(f)
         return f
     return decorator
 
+
 # Generic function to process instance commands
 def process_instance_command(instance_ids, command_type, region, az, **kwargs):
-    host_details = config['regions'][region]['availability_zones'][az]
+    """
+    Process commands for LXC instances.
+    
+    Parameters:
+    - instance_ids: List of instance IDs to process
+    - command_type: Type of command to execute
+    - region: Region where instances exist
+    - az: Availability zone where instances exist
+    - kwargs: Additional command arguments
+    """
+    if not instance_ids:
+        click.secho("❌ No instance IDs provided.", fg='red')
+        return
+        
+    try:
+        host_details = config['regions'][region]['availability_zones'][az]
+    except KeyError:
+        click.secho(f"❌ Invalid region '{region}' or availability zone '{az}'", fg='red')
+        return
 
     command_map = {
         'stop': lambda instance_id: (["pct", "shutdown", instance_id], ["pct", "shutdown", instance_id]),
@@ -224,41 +414,79 @@ def process_instance_command(instance_ids, command_type, region, az, **kwargs):
         '_snapshots': lambda instance_id: (["pct", "snapshot", instance_id], ["pct", "snapshot", instance_id]),
     }
 
-    for instance_id in instance_ids:
-        if command_type in ['snapshot_create', 'snapshot_delete']:
-            local_cmd, remote_cmd = command_map[command_type](instance_id, kwargs.get('snapshot_name'))
-        else:
-            local_cmd, remote_cmd = command_map[command_type](instance_id)
-        result = run_proxmox_command(local_cmd, remote_cmd, config['use_local_only'], host_details)
+    if command_type not in command_map:
+        click.secho(f"❌ Unknown command type: {command_type}", fg='red')
+        return
 
-        if result.returncode == 0:
-            if command_type == 'describe':
-                click.secho(f"🔧 Instance {instance_id} configuration:\n{result.stdout}", fg='cyan')
-            elif command_type == '_snapshots':
-                click.secho(f"📜 Snapshots for instance {instance_id}:\n{result.stdout}", fg='cyan')
-            else:
-                click.secho(f"✅ Instance {instance_id} {command_type} executed successfully.", fg='green')
-        else:
-            click.secho(f"❌ Failed to {command_type} instance {instance_id}: {result.stderr}", fg='red')
+    with click.progressbar(instance_ids, label=f"Processing {command_type} command") as instance_ids_bar:
+        for instance_id in instance_ids_bar:
+            try:
+                if command_type in ['snapshot_create', 'snapshot_delete']:
+                    snapshot_name = kwargs.get('snapshot_name')
+                    if not snapshot_name:
+                        click.secho(f"❌ Snapshot name is required for {command_type}", fg='red')
+                        continue
+                    local_cmd, remote_cmd = command_map[command_type](instance_id, snapshot_name)
+                else:
+                    local_cmd, remote_cmd = command_map[command_type](instance_id)
+                
+                result = run_proxmox_command(local_cmd, remote_cmd, config.get('use_local_only', False), host_details)
+
+                if result.returncode == 0:
+                    if command_type == 'describe':
+                        click.secho(f"🔧 Instance {instance_id} configuration:\n{result.stdout}", fg='cyan')
+                    elif command_type == '_snapshots':
+                        click.secho(f"📜 Snapshots for instance {instance_id}:\n{result.stdout}", fg='cyan')
+                    else:
+                        click.secho(f"✅ Instance {instance_id} {command_type} executed successfully.", fg='green')
+                else:
+                    click.secho(f"❌ Failed to {command_type} instance {instance_id}: {result.stderr}", fg='red')
+            except Exception as e:
+                click.secho(f"❌ Error processing instance {instance_id}: {str(e)}", fg='red')
+                logging.error(f"Error processing instance {instance_id} with {command_type}: {str(e)}")
+
 
 def build_resize_command(instance_id, memory=None, cpulimit=None, storage_size=None):
+    """
+    Build command for resizing an LXC container.
+    
+    Parameters:
+    - instance_id: ID of the instance to resize
+    - memory: New memory size in MB
+    - cpulimit: New CPU limit
+    - storage_size: New storage size
+    
+    Returns:
+    - Tuple of local and remote commands
+    """
     resize_cmd = ["pct", "set", instance_id]
     if memory:
         resize_cmd.extend(["--memory", str(memory)])
     if cpulimit:
         resize_cmd.extend(["--cpulimit", str(cpulimit)])
     if storage_size:
-        resize_cmd.extend(["--rootfs", f"{config['default_storage']}:{storage_size}"])
+        resize_cmd.extend(["--rootfs", f"{config.get('default_storage', 'local')}:{storage_size}"])
     return (resize_cmd, resize_cmd)
+
 
 # Function to mask sensitive information
 def mask_sensitive_info(config):
+    """
+    Mask sensitive information in the configuration.
+    
+    Parameters:
+    - config: Configuration dictionary
+    
+    Returns:
+    - Configuration with sensitive information masked
+    """
     if isinstance(config, dict):
-        return {k: ("***" if "ssh_password" in k.lower() else mask_sensitive_info(v)) for k, v in config.items()}
+        return {k: ("***" if "password" in k.lower() or "secret" in k.lower() or "key" in k.lower() else mask_sensitive_info(v)) for k, v in config.items()}
     elif isinstance(config, list):
         return [mask_sensitive_info(i) for i in config]
     else:
         return config
+
 
 @lws.group()
 @command_alias('conf')
@@ -266,12 +494,17 @@ def conf():
     """🛠️ Manage client configuration."""
     pass
 
+
 @conf.command('show')
 def show_conf():
     """📄 Show current configuration."""
-    config = load_config()
-    masked_config = mask_sensitive_info(config)
-    click.secho(yaml.dump(masked_config, default_flow_style=False), fg='cyan')
+    try:
+        config = load_config()
+        masked_config = mask_sensitive_info(config)
+        click.secho(yaml.dump(masked_config, default_flow_style=False), fg='cyan')
+    except Exception as e:
+        click.secho(f"❌ Error loading configuration: {str(e)}", fg='red')
+
 
 @conf.command('validate')
 def validate_configuration_command():
@@ -297,20 +530,24 @@ def backup_config(destination_path, timestamp, compress):
 
     logging.info(f"Backing up configuration to {destination_path}")
 
-    # Write the configuration to a file
-    with open(destination_path, 'w') as backup_file:
-        yaml.dump(config, backup_file)
-    
-    click.secho(f"✅ Configuration backed up to {destination_path}.", fg='green')
-    logging.info(f"✅ Configuration backed up to {destination_path}")
+    try:
+        # Write the configuration to a file
+        with open(destination_path, 'w') as backup_file:
+            yaml.dump(config, backup_file)
+        
+        click.secho(f"✅ Configuration backed up to {destination_path}.", fg='green')
+        logging.info(f"✅ Configuration backed up to {destination_path}")
 
-    if compress:
-        compressed_path = f"{destination_path}.gz"
-        with open(destination_path, 'rb') as f_in, gzip.open(compressed_path, 'wb') as f_out:
-            shutil.copyfileobj(f_in, f_out)
-        os.remove(destination_path)  # Remove the uncompressed file
-        click.secho(f"✅ Backup compressed to {compressed_path}.", fg='green')
-        logging.info(f"✅ Backup compressed to {compressed_path}")
+        if compress:
+            compressed_path = f"{destination_path}.gz"
+            with open(destination_path, 'rb') as f_in, gzip.open(compressed_path, 'wb') as f_out:
+                shutil.copyfileobj(f_in, f_out)
+            os.remove(destination_path)  # Remove the uncompressed file
+            click.secho(f"✅ Backup compressed to {compressed_path}.", fg='green')
+            logging.info(f"✅ Backup compressed to {compressed_path}")
+    except Exception as e:
+        click.secho(f"❌ Error backing up configuration: {str(e)}", fg='red')
+        logging.error(f"❌ Error backing up configuration: {str(e)}")
 
 
 @lws.group()
@@ -319,11 +556,13 @@ def lxc():
     """⚙️ Manage LXC containers."""
     pass
 
+
 @lws.group()
 @command_alias('px')
 def px():
     """🌐 Manage Proxmox hosts."""
     pass
+
 
 @px.command('list')
 @click.option('--region', default=None, help='Filter hosts by region.')
@@ -373,23 +612,28 @@ def list_hosts(region):
         status_symbol = check_host_reachability(host)
         return f"{status_symbol[1]} -> Region: {region} - AZ: {az} - Host: {status_symbol[0]}"
 
+    if not config.get('regions'):
+        click.secho("❌ No regions found in configuration.", fg='red')
+        return
+
     # Collect tasks for parallel execution
     tasks = []
     with ThreadPoolExecutor(max_workers=10) as executor:
         for reg, details in config['regions'].items():
             if region and reg != region:
                 continue
-            for az, az_details in details['availability_zones'].items():
+            for az, az_details in details.get('availability_zones', {}).items():
                 tasks.append(executor.submit(process_host, reg, az, az_details))
 
         # Process results as they complete
-        for future in as_completed(tasks):
+        click.secho("Checking host availability...", fg='yellow')
+        for future in tqdm(as_completed(tasks), total=len(tasks), desc="Checking hosts"):
             try:
                 result = future.result()
                 click.secho(result, fg='cyan')
             except Exception as e:
                 click.secho(f"Error checking host: {e}", fg='red')
-                
+
 @px.command('reboot')
 #@command_alias('proxmox-reboot')
 @click.option('--region', '--location', default='eu-south-1', help="Region in which to operate. Default to eu-south-1")
@@ -2897,4 +3141,9 @@ def execute_with_timeout(command, timeout, use_local_only, host_details=None):
 
 
 if __name__ == '__main__':
-    lws()
+    try:
+        lws()
+    except Exception as e:
+        click.secho(f"❌ An unexpected error occurred: {str(e)}", fg='red')
+        logging.exception("Unexpected error in main execution")
+        sys.exit(1)
