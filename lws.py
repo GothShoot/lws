@@ -3184,6 +3184,800 @@ def execute_with_timeout(command, timeout, use_local_only, host_details=None):
         raise
 
 
+# Add a dedicated function for diagnosing application-level issues
+def diagnose_network(host_details, lxc_id=None):
+    """
+    Run network diagnostics on Proxmox or LXC container.
+    
+    Parameters:
+    - host_details: Connection details for the Proxmox host
+    - lxc_id: Optional ID of LXC container to diagnose
+    
+    Returns:
+    - Dictionary containing diagnostic results
+    """
+    diagnostics = {}
+
+    # Check network interfaces
+    if lxc_id:
+        command = ["pct", "exec", lxc_id, "--", "ip", "addr"]
+    else:
+        command = ["ip", "addr"]
+    result = run_ssh_command(host_details['host'], host_details['user'], host_details['ssh_password'], command)
+    diagnostics['network_interfaces'] = result.stdout if result.returncode == 0 else result.stderr
+
+    # Check routing table
+    if lxc_id:
+        command = ["pct", "exec", lxc_id, "--", "ip", "route"]
+    else:
+        command = ["ip", "route"]
+    result = run_ssh_command(host_details['host'], host_details['user'], host_details['ssh_password'], command)
+    diagnostics['routing_table'] = result.stdout if result.returncode == 0 else result.stderr
+
+    # Check DNS resolution
+    if lxc_id:
+        command = ["pct", "exec", lxc_id, "--", "nslookup", "google.com"]
+    else:
+        command = ["nslookup", "google.com"]
+    result = run_ssh_command(host_details['host'], host_details['user'], host_details['ssh_password'], command)
+    diagnostics['dns_resolution'] = result.stdout if result.returncode == 0 else result.stderr
+
+    return diagnostics
+
+@lxc.command('health-check')
+@click.argument('instance_id', required=True)
+@click.option('--region', '--location', default='eu-south-1', help="Region in which to operate.")
+@click.option('--az', '--node', default='az1', help="Availability zone (Proxmox host) to target.")
+@click.option('--fix', is_flag=True, help="Attempt to fix common issues.")
+def container_health_check(instance_id, region, az, fix):
+    """💊 Perform health check on an LXC container."""
+    host_details = config['regions'][region]['availability_zones'][az]
+    
+    click.secho(f"🔍 Performing health check on container {instance_id}...", fg='yellow')
+    
+    # Check if container is running
+    status_cmd = ["pct", "status", instance_id]
+    status_result = run_proxmox_command(status_cmd, status_cmd, config['use_local_only'], host_details)
+    
+    if status_result.returncode != 0 or "status: running" not in status_result.stdout:
+        click.secho(f"❌ Container {instance_id} is not running.", fg='red')
+        return
+    
+    # Check for high CPU usage
+    cpu_cmd = ["pct", "exec", instance_id, "--", "top", "-bn1", "|", "grep", "Cpu"]
+    cpu_result = run_proxmox_command(cpu_cmd, cpu_cmd, config['use_local_only'], host_details)
+    
+    if cpu_result.returncode == 0:
+        cpu_line = cpu_result.stdout.strip()
+        if "id," in cpu_line:  # Look for idle percentage
+            idle_pct = float(cpu_line.split("id,")[0].split()[-1])
+            usage_pct = 100.0 - idle_pct
+            if usage_pct > 80:
+                click.secho(f"⚠️ High CPU usage detected: {usage_pct:.1f}%", fg='yellow')
+                if fix:
+                    click.secho("🔧 Attempting to reduce CPU usage...", fg='yellow')
+                    # Example fix: Restart high CPU usage processes
+                    restart_cmd = ["pct", "exec", instance_id, "--", "pkill", "-f", "high_cpu_process"]
+                    run_proxmox_command(restart_cmd, restart_cmd, config['use_local_only'], host_details)
+            else:
+                click.secho(f"✅ CPU usage is normal: {usage_pct:.1f}%", fg='green')
+    
+    # Check for high memory usage
+    mem_cmd = ["pct", "exec", instance_id, "--", "free", "-m"]
+    mem_result = run_proxmox_command(mem_cmd, mem_cmd, config['use_local_only'], host_details)
+    
+    if mem_result.returncode == 0:
+        mem_lines = mem_result.stdout.strip().split('\n')
+        if len(mem_lines) >= 2:
+            mem_values = mem_lines[1].split()
+            total_mem = int(mem_values[1])
+            used_mem = int(mem_values[2])
+            mem_usage_pct = (used_mem / total_mem) * 100
+            if mem_usage_pct > 80:
+                click.secho(f"⚠️ High memory usage detected: {mem_usage_pct:.1f}%", fg='yellow')
+                if fix:
+                    click.secho("🔧 Attempting to reduce memory usage...", fg='yellow')
+                    # Example fix: Restart high memory usage processes
+                    restart_cmd = ["pct", "exec", instance_id, "--", "pkill", "-f", "high_mem_process"]
+                    run_proxmox_command(restart_cmd, restart_cmd, config['use_local_only'], host_details)
+            else:
+                click.secho(f"✅ Memory usage is normal: {mem_usage_pct:.1f}%", fg='green')
+    
+    # Check for disk space usage
+    disk_cmd = ["pct", "exec", instance_id, "--", "df", "-h", "/"]
+    disk_result = run_proxmox_command(disk_cmd, disk_cmd, config['use_local_only'], host_details)
+    
+    if disk_result.returncode == 0:
+        disk_lines = disk_result.stdout.strip().split('\n')
+        if len(disk_lines) >= 2:
+            disk_values = disk_lines[1].split()
+            disk_usage_pct = float(disk_values[4].rstrip('%'))
+            if disk_usage_pct > 80:
+                click.secho(f"⚠️ High disk space usage detected: {disk_usage_pct:.1f}%", fg='yellow')
+                if fix:
+                    click.secho("🔧 Attempting to free up disk space...", fg='yellow')
+                    # Example fix: Clean up temporary files
+                    cleanup_cmd = ["pct", "exec", instance_id, "--", "rm", "-rf", "/tmp/*"]
+                    run_proxmox_command(cleanup_cmd, cleanup_cmd, config['use_local_only'], host_details)
+            else:
+                click.secho(f"✅ Disk space usage is normal: {disk_usage_pct:.1f}%", fg='green')
+    
+    # Check for network issues
+    network_diagnostics = diagnose_network(host_details, lxc_id=instance_id)
+    if "unreachable" in network_diagnostics['dns_resolution']:
+        click.secho("⚠️ Network issues detected: DNS resolution failed", fg='yellow')
+        if fix:
+            click.secho("🔧 Attempting to fix DNS resolution...", fg='yellow')
+            # Example fix: Restart networking service
+            restart_cmd = ["pct", "exec", instance_id, "--", "systemctl", "restart", "networking"]
+            run_proxmox_command(restart_cmd, restart_cmd, config['use_local_only'], host_details)
+    else:
+        click.secho("✅ Network is functioning normally.", fg='green')
+    
+    click.secho(f"✅ Health check for container {instance_id} completed.", fg='green')
+
+@lxc.command('backup-restore')
+@click.argument('instance_id', required=True)
+@click.option('--backup-file', required=True, help="Path to the backup file to restore.")
+@click.option('--region', '--location', default='eu-south-1', help="Region in which to operate.")
+@click.option('--az', '--node', default='az1', help="Availability zone (Proxmox host) to target.")
+@click.option('--force', is_flag=True, help="Force restore without confirmation.")
+def restore_container(instance_id, backup_file, region, az, force):
+    """🔄 Restore an LXC container from a backup file."""
+    host_details = config['regions'][region]['availability_zones'][az]
+    
+    if not force:
+        click.confirm(f"⚠️ This will overwrite the current state of container {instance_id}. Are you sure?", abort=True)
+    
+    # Check if the container exists and is stopped
+    status_cmd = ["pct", "status", instance_id]
+    status_result = run_proxmox_command(status_cmd, status_cmd, config['use_local_only'], host_details)
+    
+    if status_result.returncode != 0:
+        click.secho(f"❌ Failed to get status of container {instance_id}: {status_result.stderr}", fg='red')
+        return
+    
+    if "status: running" in status_result.stdout:
+        click.secho("⚠️ Container is running. Stopping container before restore...", fg='yellow')
+        stop_cmd = ["pct", "stop", instance_id]
+        stop_result = run_proxmox_command(stop_cmd, stop_cmd, config['use_local_only'], host_details)
+        
+        if stop_result.returncode != 0:
+            click.secho(f"❌ Failed to stop container {instance_id}: {stop_result.stderr}", fg='red')
+            return
+        
+        click.secho("✅ Container stopped successfully.", fg='green')
+    
+    # First, check if backup file exists on local system
+    if os.path.exists(backup_file):
+        # Upload backup to Proxmox host
+        click.secho(f"📤 Uploading backup file to Proxmox host...", fg='yellow')
+        remote_backup_path = f"/tmp/backup_{instance_id}.tar.gz"
+        
+        scp_cmd = ["scp", backup_file, f"{host_details['user']}@{host_details['host']}:{remote_backup_path}"]
+        scp_result = subprocess.run(scp_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        
+        if scp_result.returncode != 0:
+            click.secho(f"❌ Failed to upload backup file: {scp_result.stderr}", fg='red')
+            return
+        
+        backup_path = remote_backup_path
+    else:
+        # Check if file exists on remote host
+        check_file_cmd = ["test", "-f", backup_file, "&&", "echo", "exists"]
+        file_check_result = run_proxmox_command(check_file_cmd, check_file_cmd, config['use_local_only'], host_details)
+        
+        if "exists" not in file_check_result.stdout:
+            click.secho(f"❌ Backup file not found: {backup_file}", fg='red')
+            return
+        
+        backup_path = backup_file
+    
+    click.secho(f"🔄 Restoring container {instance_id} from backup...", fg='yellow')
+    
+    # Extract the backup to a temporary directory
+    temp_dir = f"/tmp/restore_{instance_id}"
+    mkdir_cmd = ["mkdir", "-p", temp_dir]
+    mkdir_result = run_proxmox_command(mkdir_cmd, mkdir_cmd, config['use_local_only'], host_details)
+    
+    if mkdir_result.returncode != 0:
+        click.secho(f"❌ Failed to create temporary directory: {mkdir_result.stderr}", fg='red')
+        return
+    
+    # Extract the backup
+    extract_cmd = ["tar", "-xzf", backup_path, "-C", temp_dir]
+    extract_result = run_proxmox_command(extract_cmd, extract_cmd, config['use_local_only'], host_details)
+    
+    if extract_result.returncode != 0:
+        click.secho(f"❌ Failed to extract backup: {extract_result.stderr}", fg='red')
+        return
+    
+    # Restore the configuration
+    restore_config_cmd = ["pct", "restore", instance_id, f"{temp_dir}/vzdump-lxc-{instance_id}.tar.gz", "--force"]
+    restore_result = run_proxmox_command(restore_config_cmd, restore_config_cmd, config['use_local_only'], host_details)
+    
+    if restore_result.returncode != 0:
+        click.secho(f"❌ Failed to restore container: {restore_result.stderr}", fg='red')
+        return
+    
+    # Clean up temporary files
+    cleanup_cmd = ["rm", "-rf", temp_dir, backup_path]
+    run_proxmox_command(cleanup_cmd, cleanup_cmd, config['use_local_only'], host_details)
+    
+    click.secho(f"✅ Container {instance_id} restored successfully.", fg='green')
+    
+    # Start the container
+    start_cmd = ["pct", "start", instance_id]
+    start_result = run_proxmox_command(start_cmd, start_cmd, config['use_local_only'], host_details)
+    
+    if start_result.returncode == 0:
+        click.secho(f"✅ Container {instance_id} started successfully.", fg='green')
+    else:
+        click.secho(f"❌ Failed to start container {instance_id}: {start_result.stderr}", fg='red')
+
+@lxc.command('backup-create')
+@click.argument('instance_id', required=True)
+@click.option('--destination', default="/var/lib/vz/dump", help="Destination directory for the backup.")
+@click.option('--region', '--location', default='eu-south-1', help="Region in which to operate.")
+@click.option('--az', '--node', default='az1', help="Availability zone (Proxmox host) to target.")
+@click.option('--download', is_flag=True, help="Download the backup file to local system.")
+@click.option('--compress-level', default=6, type=int, help="Compression level (1-9).")
+def create_container_backup(instance_id, destination, region, az, download, compress_level):
+    """💾 Create a backup of an LXC container."""
+    host_details = config['regions'][region]['availability_zones'][az]
+    
+    # Create the destination directory if it doesn't exist
+    mkdir_cmd = ["mkdir", "-p", destination]
+    mkdir_result = run_proxmox_command(mkdir_cmd, mkdir_cmd, config['use_local_only'], host_details)
+    
+    if mkdir_result.returncode != 0:
+        click.secho(f"❌ Failed to create destination directory: {mkdir_result.stderr}", fg='red')
+        return
+    
+    # Create the backup using vzdump
+    timestamp = time.strftime("%Y%m%d-%H%M%S")
+    backup_filename = f"backup-{instance_id}-{timestamp}.tar.gz"
+    backup_path = os.path.join(destination, backup_filename)
+    
+    click.secho(f"📦 Creating backup of container {instance_id}...", fg='yellow')
+    backup_cmd = [
+        "vzdump", instance_id, 
+        "--compress", str(compress_level),
+        "--dumpdir", destination,
+        "--mode", "snapshot"
+    ]
+    
+    backup_result = run_proxmox_command(backup_cmd, backup_cmd, config['use_local_only'], host_details)
+    
+    if backup_result.returncode != 0:
+        click.secho(f"❌ Failed to create backup: {backup_result.stderr}", fg='red')
+        return
+    
+    # Get the actual backup filename from the output
+    for line in backup_result.stdout.splitlines():
+        if "creating archive" in line:
+            backup_path = line.split("creating archive '")[1].split("'")[0]
+            break
+    
+    click.secho(f"✅ Backup created successfully: {backup_path}", fg='green')
+    
+    # Download the backup if requested
+    if download:
+        click.secho(f"📥 Downloading backup file to current directory...", fg='yellow')
+        local_path = os.path.basename(backup_path)
+        
+        scp_cmd = ["scp", f"{host_details['user']}@{host_details['host']}:{backup_path}", local_path]
+        scp_result = subprocess.run(scp_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        
+        if scp_result.returncode == 0:
+            click.secho(f"✅ Backup downloaded successfully to {os.path.abspath(local_path)}", fg='green')
+        else:
+            click.secho(f"❌ Failed to download backup: {scp_result.stderr}", fg='red')
+
+@sec.command('scan')
+@click.argument('instance_id', required=True)
+@click.option('--region', '--location', default='eu-south-1', help="Region in which to operate.")
+@click.option('--az', '--node', default='az1', help="Availability zone (Proxmox host) to target.")
+@click.option('--scan-type', type=click.Choice(['quick', 'full']), default='quick', help="Type of security scan to perform.")
+def security_scan(instance_id, region, az, scan_type):
+    """🔒 Perform a security scan on an LXC container."""
+    host_details = config['regions'][region]['availability_zones'][az]
+    
+    click.secho(f"🔍 Starting {scan_type} security scan of container {instance_id}...", fg='yellow')
+    
+    # Check if container is running
+    status_cmd = ["pct", "status", instance_id]
+    status_result = run_proxmox_command(status_cmd, status_cmd, config['use_local_only'], host_details)
+    
+    if status_result.returncode != 0 or "status: running" not in status_result.stdout:
+        click.secho(f"❌ Container {instance_id} is not running.", fg='red')
+        return
+    
+    # Ensure required tools are installed
+    tools = ["nmap", "lynis"]
+    for tool in tools:
+        check_tool_cmd = ["pct", "exec", instance_id, "--", "which", tool]
+        check_result = run_proxmox_command(check_tool_cmd, check_tool_cmd, config['use_local_only'], host_details)
+        
+        if check_result.returncode != 0:
+            # Try to install the missing tool
+            click.secho(f"📦 Installing {tool} in container {instance_id}...", fg='yellow')
+            install_cmd = ["pct", "exec", instance_id, "--", "apt-get", "update", "&&", "apt-get", "install", "-y", tool]
+            install_result = run_proxmox_command(install_cmd, install_cmd, config['use_local_only'], host_details)
+            
+            if install_result.returncode != 0:
+                click.secho(f"❌ Failed to install {tool}: {install_result.stderr}", fg='red')
+                return
+    
+    # 1. Check for exposed services using nmap
+    click.secho("🔍 Checking for exposed services...", fg='yellow')
+    nmap_cmd = ["pct", "exec", instance_id, "--", "nmap", "-sT", "-p", "1-65535", "localhost"]
+    nmap_result = run_proxmox_command(nmap_cmd, nmap_cmd, config['use_local_only'], host_details)
+    
+    if nmap_result.returncode == 0:
+        click.secho("🔌 Exposed services:", fg='cyan')
+        in_services_section = False
+        for line in nmap_result.stdout.splitlines():
+            if "/tcp" in line and "open" in line:
+                click.secho(f"  {line}", fg='white')
+    else:
+        click.secho(f"❌ Failed to scan for exposed services: {nmap_result.stderr}", fg='red')
+    
+    # 2. Check for outdated packages
+    click.secho("🔍 Checking for outdated packages...", fg='yellow')
+    outdated_cmd = ["pct", "exec", instance_id, "--", "apt", "list", "--upgradable"]
+    outdated_result = run_proxmox_command(outdated_cmd, outdated_cmd, config['use_local_only'], host_details)
+    
+    if outdated_result.returncode == 0:
+        outdated_packages = [line for line in outdated_result.stdout.splitlines() if "/" in line]
+        if outdated_packages:
+            click.secho(f"📦 Found {len(outdated_packages)} outdated packages:", fg='yellow')
+            for package in outdated_packages[:10]:  # Limit to 10 packages to avoid flooding
+                click.secho(f"  {package}", fg='white')
+            if len(outdated_packages) > 10:
+                click.secho(f"  ... and {len(outdated_packages) - 10} more", fg='white')
+        else:
+            click.secho("✅ All packages are up to date.", fg='green')
+    else:
+        click.secho(f"❌ Failed to check for outdated packages: {outdated_result.stderr}", fg='red')
+    
+    # 3. Run system security audit with Lynis if full scan requested
+    if scan_type == 'full':
+        click.secho("🔍 Running full system security audit with Lynis...", fg='yellow')
+        lynis_cmd = ["pct", "exec", instance_id, "--", "lynis", "audit", "system"]
+        lynis_result = run_proxmox_command(lynis_cmd, lynis_cmd, config['use_local_only'], host_details)
+        
+        if lynis_result.returncode == 0:
+            # Extract warnings from Lynis output
+            warnings = []
+            in_warning_section = False
+            for line in lynis_result.stdout.splitlines():
+                if "Warnings:" in line:
+                    in_warning_section = True
+                    continue
+                if in_warning_section and line.strip() == "":
+                    in_warning_section = False
+                    continue
+                if in_warning_section:
+                    warnings.append(line.strip())
+            
+            if warnings:
+                click.secho(f"⚠️ Security warnings found:", fg='yellow')
+                for warning in warnings:
+                    click.secho(f"  {warning}", fg='white')
+            else:
+                click.secho("✅ No critical security issues found.", fg='green')
+        else:
+            click.secho(f"❌ Failed to run Lynis security audit: {lynis_result.stderr}", fg='red')
+    
+    # 4. Check for weak SSH configuration
+    click.secho("🔍 Checking SSH configuration...", fg='yellow')
+    ssh_cmd = ["pct", "exec", instance_id, "--", "cat", "/etc/ssh/sshd_config"]
+    ssh_result = run_proxmox_command(ssh_cmd, ssh_cmd, config['use_local_only'], host_details)
+    
+    if ssh_result.returncode == 0:
+        ssh_issues = []
+        
+        # Check for root login permitted
+        if "PermitRootLogin yes" in ssh_result.stdout:
+            ssh_issues.append("Root login is permitted")
+        
+        # Check for password authentication
+        if "PasswordAuthentication yes" in ssh_result.stdout:
+            ssh_issues.append("Password authentication is enabled")
+        
+        # Check for protocol version
+        if "Protocol 1" in ssh_result.stdout:
+            ssh_issues.append("SSH Protocol 1 is enabled (insecure)")
+        
+        if ssh_issues:
+            click.secho("⚠️ SSH configuration issues:", fg='yellow')
+            for issue in ssh_issues:
+                click.secho(f"  {issue}", fg='white')
+        else:
+            click.secho("✅ SSH configuration appears secure.", fg='green')
+    else:
+        click.secho(f"❌ Failed to check SSH configuration: {ssh_result.stderr}", fg='red')
+    
+    click.secho(f"✅ Security scan of container {instance_id} completed.", fg='green')
+
+@lxc.command('resources')
+@click.argument('instance_id', required=True)
+@click.option('--region', '--location', default='eu-south-1', help="Region in which to operate.")
+@click.option('--az', '--node', default='az1', help="Availability zone (Proxmox host) to target.")
+@click.option('--interval', default=2, help="Monitoring interval in seconds.")
+@click.option('--count', default=5, help="Number of monitoring intervals.")
+def monitor_container_resources(instance_id, region, az, interval, count):
+    """📊 Monitor real-time resource usage of an LXC container."""
+    host_details = config['regions'][region]['availability_zones'][az]
+    
+    # Check if container is running
+    status_cmd = ["pct", "status", instance_id]
+    status_result = run_proxmox_command(status_cmd, status_cmd, config['use_local_only'], host_details)
+    
+    if status_result.returncode != 0 or "status: running" not in status_result.stdout:
+        click.secho(f"❌ Container {instance_id} is not running.", fg='red')
+        return
+    
+    click.secho(f"📊 Monitoring resource usage for container {instance_id} (interval: {interval}s, count: {count})", fg='cyan')
+    
+    # Get container resource limits
+    config_cmd = ["pct", "config", instance_id]
+    config_result = run_proxmox_command(config_cmd, config_cmd, config['use_local_only'], host_details)
+    
+    if config_result.returncode != 0:
+        click.secho(f"❌ Failed to get container configuration: {config_result.stderr}", fg='red')
+        return
+    
+    # Parse CPU and memory limits
+    cpu_limit = None
+    memory_limit = None
+    
+    for line in config_result.stdout.splitlines():
+        if line.startswith("cores:"):
+            cpu_limit = line.split(":")[1].strip()
+        elif line.startswith("memory:"):
+            memory_limit = int(line.split(":")[1].strip())
+    
+    click.secho(f"📌 Resource limits - CPU cores: {cpu_limit}, Memory: {memory_limit} MB", fg='cyan')
+    
+    # Monitor resource usage over time
+    for i in range(count):
+        if i > 0:
+            time.sleep(interval)
+        
+        # Get CPU usage
+        cpu_cmd = ["pct", "exec", instance_id, "--", "top", "-bn1", "|", "grep", "Cpu"]
+        cpu_result = run_proxmox_command(cpu_cmd, cpu_cmd, config['use_local_only'], host_details)
+        
+        # Get memory usage
+        mem_cmd = ["pct", "exec", instance_id, "--", "free", "-m"]
+        mem_result = run_proxmox_command(mem_cmd, mem_cmd, config['use_local_only'], host_details)
+        
+        # Get disk usage
+        disk_cmd = ["pct", "exec", instance_id, "--", "df", "-h", "/"]
+        disk_result = run_proxmox_command(disk_cmd, disk_cmd, config['use_local_only'], host_details)
+        
+        # Get running processes count
+        proc_cmd = ["pct", "exec", instance_id, "--", "ps", "aux", "|", "wc", "-l"]
+        proc_result = run_proxmox_command(proc_cmd, proc_cmd, config['use_local_only'], host_details)
+        
+        click.secho(f"\n📊 Snapshot {i+1}/{count} at {time.strftime('%H:%M:%S')}", fg='yellow')
+        
+        # Parse and display CPU usage
+        if cpu_result.returncode == 0:
+            try:
+                cpu_line = cpu_result.stdout.strip()
+                if "id," in cpu_line:  # Look for idle percentage
+                    # Extract the idle percentage and convert to usage
+                    idle_pct = float(cpu_line.split("id,")[0].split()[-1])
+                    usage_pct = 100.0 - idle_pct
+                    cpu_color = 'green' if usage_pct < 70 else ('yellow' if usage_pct < 90 else 'red')
+                    click.secho(f"CPU Usage: {usage_pct:.1f}%", fg=cpu_color)
+            except:
+                click.secho(f"CPU Usage: Unable to parse", fg='red')
+        else:
+            click.secho(f"CPU Usage: Unable to retrieve", fg='red')
+        
+        # Parse and display memory usage
+        if mem_result.returncode == 0:
+            try:
+                mem_lines = mem_result.stdout.strip().split('\n')
+                if len(mem_lines) >= 2:
+                    mem_values = mem_lines[1].split()
+                    total_mem = int(mem_values[1])
+                    used_mem = int(mem_values[2])
+                    mem_usage_pct = (used_mem / total_mem) * 100 if total_mem > 0 else 0
+                    mem_color = 'green' if mem_usage_pct < 70 else ('yellow' if mem_usage_pct < 90 else 'red')
+                    click.secho(f"Memory Usage: {used_mem} MB / {total_mem} MB ({mem_usage_pct:.1f}%)", fg=mem_color)
+            except:
+                click.secho(f"Memory Usage: Unable to parse", fg='red')
+        else:
+            click.secho(f"Memory Usage: Unable to retrieve", fg='red')
+        
+        # Parse and display disk usage
+        if disk_result.returncode == 0:
+            try:
+                disk_lines = disk_result.stdout.strip().split('\n')
+                if len(disk_lines) >= 2:
+                    disk_values = disk_lines[1].split()
+                    if len(disk_values) >= 5:
+                        disk_usage = disk_values[4].rstrip('%')
+                        disk_color = 'green' if float(disk_usage) < 70 else ('yellow' if float(disk_usage) < 90 else 'red')
+                        click.secho(f"Disk Usage: {disk_usage}% of {disk_values[1]}", fg=disk_color)
+            except:
+                click.secho(f"Disk Usage: Unable to parse", fg='red')
+        else:
+            click.secho(f"Disk Usage: Unable to retrieve", fg='red')
+        
+        # Display process count
+        if proc_result.returncode == 0:
+            try:
+                proc_count = int(proc_result.stdout.strip())
+                click.secho(f"Running Processes: {proc_count}", fg='cyan')
+            except:
+                click.secho(f"Running Processes: Unable to parse", fg='red')
+        else:
+            click.secho(f"Running Processes: Unable to retrieve", fg='red')
+    
+    click.secho(f"\n✅ Resource monitoring for container {instance_id} completed.", fg='green')
+
+@lxc.command('report')
+@click.argument('instance_id', required=True)
+@click.option('--region', '--location', default='eu-south-1', help="Region in which to operate.")
+@click.option('--az', '--node', default='az1', help="Availability zone (Proxmox host) to target.")
+@click.option('--output', type=click.Choice(['text', 'json']), default='text', help="Output format.")
+@click.option('--file', type=click.Path(), help="Save report to file instead of displaying.")
+def generate_container_report(instance_id, region, az, output, file):
+    """📋 Generate a comprehensive report about an LXC container."""
+    host_details = config['regions'][region]['availability_zones'][az]
+    
+    click.secho(f"🔍 Generating report for container {instance_id}...", fg='yellow')
+    
+    report = {
+        "container_id": instance_id,
+        "report_time": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "region": region,
+        "availability_zone": az
+    }
+    
+    # 1. Get container status
+    status_cmd = ["pct", "status", instance_id]
+    status_result = run_proxmox_command(status_cmd, status_cmd, config['use_local_only'], host_details)
+    
+    if status_result.returncode == 0:
+        status_text = status_result.stdout.strip()
+        if "status: running" in status_text:
+            report["status"] = "running"
+        elif "status: stopped" in status_text:
+            report["status"] = "stopped"
+        else:
+            report["status"] = "unknown"
+    else:
+        report["status"] = "error"
+        report["status_error"] = status_result.stderr.strip()
+    
+    # 2. Get container configuration
+    config_cmd = ["pct", "config", instance_id]
+    config_result = run_proxmox_command(config_cmd, config_cmd, config['use_local_only'], host_details)
+    
+    if config_result.returncode == 0:
+        config_text = config_result.stdout.strip()
+        config_dict = {}
+        
+        for line in config_text.splitlines():
+            if ":" in line:
+                key, value = line.split(":", 1)
+                config_dict[key.strip()] = value.strip()
+        
+        report["configuration"] = config_dict
+    else:
+        report["configuration"] = {"error": config_result.stderr.strip()}
+    
+    # 3. Get resource usage (if running)
+    if report["status"] == "running":
+        # CPU usage
+        cpu_cmd = ["pct", "exec", instance_id, "--", "top", "-bn1"]
+        cpu_result = run_proxmox_command(cpu_cmd, cpu_cmd, config['use_local_only'], host_details)
+        
+        if cpu_result.returncode == 0:
+            cpu_info = {"raw": cpu_result.stdout.strip()}
+            
+            # Parse CPU usage
+            cpu_line = None
+            for line in cpu_result.stdout.splitlines():
+                if "Cpu(s):" in line:
+                    cpu_line = line.strip()
+                    break
+            
+            if cpu_line:
+                cpu_info["usage_line"] = cpu_line
+                try:
+                    idle_part = cpu_line.split("id,")[0].split()[-1]
+                    idle_pct = float(idle_part)
+                    cpu_info["usage_percent"] = round(100.0 - idle_pct, 1)
+                except:
+                    cpu_info["usage_percent"] = None
+            
+            report["cpu"] = cpu_info
+        else:
+            report["cpu"] = {"error": cpu_result.stderr.strip()}
+        
+        # Memory usage
+        mem_cmd = ["pct", "exec", instance_id, "--", "free", "-m"]
+        mem_result = run_proxmox_command(mem_cmd, mem_cmd, config['use_local_only'], host_details)
+        
+        if mem_result.returncode == 0:
+            mem_info = {"raw": mem_result.stdout.strip()}
+            
+            try:
+                mem_lines = mem_result.stdout.strip().split('\n')
+                if len(mem_lines) >= 2:
+                    mem_values = mem_lines[1].split()
+                    mem_info["total_mb"] = int(mem_values[1])
+                    mem_info["used_mb"] = int(mem_values[2])
+                    mem_info["free_mb"] = int(mem_values[3])
+                    mem_info["usage_percent"] = round((mem_info["used_mb"] / mem_info["total_mb"]) * 100, 1)
+            except:
+                pass
+            
+            report["memory"] = mem_info
+        else:
+            report["memory"] = {"error": mem_result.stderr.strip()}
+        
+        # Disk usage
+        disk_cmd = ["pct", "exec", instance_id, "--", "df", "-h"]
+        disk_result = run_proxmox_command(disk_cmd, disk_cmd, config['use_local_only'], host_details)
+        
+        if disk_result.returncode == 0:
+            disk_info = {"raw": disk_result.stdout.strip()}
+            
+            try:
+                # Parse the filesystem information
+                filesystems = []
+                disk_lines = disk_result.stdout.strip().split('\n')
+                headers = disk_lines[0].split()
+                
+                for line in disk_lines[1:]:
+                    values = line.split()
+                    if len(values) >= len(headers):
+                        fs_info = {}
+                        for i, header in enumerate(headers):
+                            fs_info[header.lower()] = values[i]
+                        filesystems.append(fs_info)
+                
+                disk_info["filesystems"] = filesystems
+            except:
+                pass
+            
+            report["disk"] = disk_info
+        else:
+            report["disk"] = {"error": disk_result.stderr.strip()}
+        
+        # Network information
+        net_cmd = ["pct", "exec", instance_id, "--", "ip", "addr"]
+        net_result = run_proxmox_command(net_cmd, net_cmd, config['use_local_only'], host_details)
+        
+        if net_result.returncode == 0:
+            net_info = {"raw": net_result.stdout.strip()}
+            
+            # Extract IP addresses
+            ip_addresses = []
+            current_interface = None
+            
+            for line in net_result.stdout.splitlines():
+                line = line.strip()
+                
+                # Match interface lines
+                if ": " in line and not line.startswith(" "):
+                    current_interface = line.split(": ")[1].split("@")[0]
+                
+                # Match IP address lines
+                elif "inet " in line and current_interface:
+                    ip_addr = line.split("inet ")[1].split("/")[0]
+                    ip_addresses.append({"interface": current_interface, "address": ip_addr})
+            
+            net_info["ip_addresses"] = ip_addresses
+            report["network"] = net_info
+        else:
+            report["network"] = {"error": net_result.stderr.strip()}
+        
+        # Running processes
+        ps_cmd = ["pct", "exec", instance_id, "--", "ps", "aux", "--sort=-%mem", "|", "head", "-n", "11"]
+        ps_result = run_proxmox_command(ps_cmd, ps_cmd, config['use_local_only'], host_details)
+        
+        if ps_result.returncode == 0:
+            proc_lines = ps_result.stdout.strip().split('\n')
+            
+            if len(proc_lines) > 1:  # Ensure we have at least a header and a process
+                top_processes = []
+                headers = proc_lines[0].split()
+                
+                for line in proc_lines[1:]:
+                    process = {}
+                    parts = line.split(None, len(headers) - 1)
+                    
+                    for i, header in enumerate(headers):
+                        if i < len(parts):
+                            # Try to convert numeric values
+                            try:
+                                if header in ['%CPU', '%MEM']:
+                                    process[header.lower().replace('%', '')] = float(parts[i])
+                                elif header in ['PID', 'VSZ', 'RSS']:
+                                    process[header.lower()] = int(parts[i])
+                                else:
+                                    process[header.lower()] = parts[i]
+                            except:
+                                process[header.lower()] = parts[i]
+                    
+                    top_processes.append(process)
+                
+                report["processes"] = {
+                    "top_by_memory": top_processes,
+                    "count": len(top_processes)
+                }
+            else:
+                report["processes"] = {"raw": ps_result.stdout.strip()}
+        else:
+            report["processes"] = {"error": ps_result.stderr.strip()}
+    
+    # Format and output the report
+    if output == 'json':
+        formatted_report = json.dumps(report, indent=2)
+    else:  # text format
+        formatted_report = f"Container Report: {instance_id}\n"
+        formatted_report += f"Generated: {report['report_time']}\n"
+        formatted_report += f"Region: {report['region']}, AZ: {report['availability_zone']}\n\n"
+        
+        # Status
+        formatted_report += f"Status: {report['status'].upper()}\n\n"
+        
+        # Configuration
+        formatted_report += "Configuration:\n"
+        if "configuration" in report and isinstance(report["configuration"], dict):
+            for key, value in report["configuration"].items():
+                formatted_report += f"  {key}: {value}\n"
+        
+        # Resource usage
+        if report["status"] == "running":
+            formatted_report += "\nResource Usage:\n"
+            
+            # CPU
+            if "cpu" in report and "usage_percent" in report["cpu"] and report["cpu"]["usage_percent"] is not None:
+                formatted_report += f"  CPU: {report['cpu']['usage_percent']}% used\n"
+            
+            # Memory
+            if "memory" in report and "usage_percent" in report["memory"]:
+                formatted_report += f"  Memory: {report['memory']['used_mb']}/{report['memory']['total_mb']} MB ({report['memory']['usage_percent']}%)\n"
+            
+            # Disk
+            if "disk" in report and "filesystems" in report["disk"]:
+                formatted_report += "  Disk Usage:\n"
+                for fs in report["disk"]["filesystems"]:
+                    if "filesystem" in fs and "use%" in fs:
+                        formatted_report += f"    {fs.get('filesystem', 'unknown')}: {fs.get('use%', 'unknown')} of {fs.get('size', 'unknown')}\n"
+            
+            # Network
+            if "network" in report and "ip_addresses" in report["network"]:
+                formatted_report += "  IP Addresses:\n"
+                for ip in report["network"]["ip_addresses"]:
+                    formatted_report += f"    {ip['interface']}: {ip['address']}\n"
+            
+            # Processes
+            if "processes" in report and "top_by_memory" in report["processes"]:
+                formatted_report += "\nTop Processes (by memory usage):\n"
+                for proc in report["processes"]["top_by_memory"][:5]:  # Limit to top 5
+                    formatted_report += f"  {proc.get('pid', 'N/A')} {proc.get('user', 'N/A')} {proc.get('cpu', 'N/A')}% {proc.get('mem', 'N/A')}% {proc.get('command', 'N/A')}\n"
+    
+    # Output the report
+    if file:
+        with open(file, 'w') as f:
+            f.write(formatted_report)
+        click.secho(f"✅ Report saved to {file}", fg='green')
+    else:
+        click.secho(formatted_report, fg='cyan')
+    
+    click.secho(f"✅ Report generation for container {instance_id} completed.", fg='green')
 
 if __name__ == '__main__':
     try:
