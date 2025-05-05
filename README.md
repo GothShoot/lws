@@ -108,7 +108,7 @@ Recently, LWS has been expanded to include:
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/lws.git
+git clone https://github.com/fabriziosalmi/lws.git
 cd lws
 ```
 
