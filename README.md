@@ -5,20 +5,16 @@
 [![asciicast](https://asciinema.org/a/8rE7H67VjQ15HQ9KtsJVMRR4O.svg)](https://asciinema.org/a/8rE7H67VjQ15HQ9KtsJVMRR4O)
 
 ## Table of Contents
-
 - [Introduction](#introduction)
 - [Features](#features)
 - [Getting Started](#getting-started)
-  - [Prerequisites](#prerequisites)
-  - [Installation](#installation)
-  - [Configuration](#configuration)
 - [Usage](#usage)
-  - [Proxmox Management](#proxmox-management)
+  - [Proxmox Host Management](#proxmox-host-management)
   - [LXC Container Management](#lxc-container-management)
   - [Docker Management](#docker-management)
-  - [Client Configuration Management](#client-configuration-management)
-  - [Managing Instance Profiles](#managing-instance-profiles)
-  - [Managing Security Settings](#managing-security-settings)
+  - [Container Backups & Restores](#container-backups--restores)
+  - [Monitoring & Reporting](#monitoring--reporting)
+  - [Security Tools](#security-tools)
   - [Managing Scaling Thresholds and Triggers](#managing-scaling-thresholds-and-triggers)
 - [Security Considerations](#security-considerations)
 - [Best Practices](#best-practices)
@@ -29,431 +25,362 @@
 
 ## Introduction
 
-**lws** was created to simplify and unify the management of Proxmox VE, LXC containers, and Docker services using a single command-line tool. Although powerful, **lws** is still in its early stages and was developed primarily for learning and exploration. It should be used with caution, especially in production environments.
+**lws** (Linux Web Services) is an open-source CLI tool designed to help developers and system administrators manage Proxmox environments, LXC containers, and Docker services with a unified, AWS-like interface. It simplifies complex operations, reducing them to single commands that can be executed locally or remotely.
 
 ## Features
 
 ### General
-- **Comprehensive Logging**: Supports detailed logging in both standard and JSON formats.
-- **Flexible Configuration**: YAML-based configuration for easy setup and management.
-- **Secure Operations**: Uses SSH for secure communications, with sensitive information masked in logs.
+
+- **Unified Interface**: Manage Proxmox hosts, LXC containers, and Docker services with a single tool
+- **Remote Operations**: Execute commands locally or remotely via SSH
+- **Error Handling**: Robust error detection and reporting
+- **Logging**: Comprehensive logging with both text and JSON formats
+- **Command Alias Support**: Use short aliases for common commands
 
 ### Proxmox Management
-- **Cluster Management**: Control and monitor Proxmox clusters, including service lifecycle operations.
-- **Resource Monitoring**: Monitor CPU, memory, disk, and network usage across Proxmox hosts.
-- **Host Operations**: Execute essential operations like rebooting and updating hosts.
+
+- **Host Monitoring**: Monitor CPU, memory, and disk usage of Proxmox hosts
+- **Cluster Operations**: Manage Proxmox clusters (start, stop, restart)
+- **Template Management**: Upload, create, and delete LXC templates
+- **Firewall Rules**: Define and manage security groups and firewall rules
+- **Host Backups**: Create and manage backups of Proxmox configurations
 
 ### LXC Container Management
-- **Lifecycle Management**: Start, stop, reboot, and terminate LXC containers with ease.
-- **Resource ng**: Dynamically adjust container resources (CPU, memory, storage).
-- **Snapshot Management**: Create, delete, and manage snapshots for containers.
-- **Security Group Management**: Implement and manage security groups and rules.
+
+- **Container Operations**: Create, start, stop, reboot, and destroy containers
+- **Resource Scaling**: Dynamically adjust CPU, memory, and storage resources
+- **Snapshot Management**: Create, list, and restore container snapshots
+- **Network Configuration**: Configure network settings for containers
+- **Volume Management**: Attach and detach storage volumes to containers
+- **Container Migration**: Migrate containers between Proxmox hosts
+- **Clone Containers**: Create identical copies of existing containers
+- **Command Execution**: Run arbitrary commands within containers
+- **Network Testing**: Test network connectivity from containers
+- **Backup & Restore**: Create and restore container backups
 
 ### Docker Management
-- **Easy Setup**: Simplified installation and setup of Docker and Docker Compose on LXC containers.
-- **Application Deployment**: Deploy, update, and manage Docker Compose applications.
-- **Container Operations**: Manage Docker containers, including running, stopping, and fetching logs.
-- **Auto-start Configuration**: Configure Docker apps to auto-start on container boot.
+
+- **Installation**: Install Docker and Docker Compose within LXC containers
+- **Container Operations**: Run, stop, and manage Docker containers
+- **Application Deployment**: Deploy applications using Docker Compose
+- **Log Access**: View logs from Docker containers
+- **Container Listing**: List running Docker containers
+- **Application Updates**: Update applications with new images
+
+### Security Tools
+
+- **Security Scanning**: Perform security audits on containers
+- **Network Discovery**: Discover reachable hosts in container networks
+- **Health Checks**: Perform health checks with automatic issue detection
+- **Monitoring**: Monitor real-time resource usage with thresholds
+
+### Resource Reporting
+
+- **Advanced Container Reports**: Generate comprehensive reports on container status and resources
+- **Resource Monitoring**: Real-time monitoring of container CPU, memory, and disk usage
+- **Scaling Recommendations**: Get intelligent scaling suggestions based on usage patterns
 
 ## Getting Started
 
 ### Prerequisites
 
-Before using **lws**, ensure you have the following:
-
-- **Python 3.6+**: Required to run **lws**.
-- **Proxmox VE**: **lws** is designed to work with Proxmox Virtual Environment.
-- **SSH Access**: **lws** uses SSH to interact with Proxmox hosts and LXC containers.
-- **Pip**: Python's package installer.
+- Python 3.6 or higher
+- Proxmox Virtual Environment 6.x or higher
+- SSH access to Proxmox hosts
+- The following Python packages:
+  - click
+  - pyyaml
+  - requests
+  - tqdm
 
 ### Installation
 
-1. **Clone the Repository**
-   ```bash
-   git clone https://github.com/fabriziosalmi/lws.git
-   cd lws
-   ```
+1. Clone the repository:
+```bash
+git clone https://github.com/yourusername/lws.git
+cd lws
+```
 
-2. **Install Dependencies**
-   ```bash
-   pip install -r requirements.txt
-   ```
+2. Install required Python packages:
+```bash
+pip install -r requirements.txt
+```
 
-3. **Make lws Executable**
-   ```bash
-   chmod +x lws.py
-   ```
-
-4. **Create a Shortcut**
-   ```bash
-   alias lws='./lws.py'
-   ```
-
-5. **Verify Installation**
-   ```bash
-   lws --help
-   ```
-
-### Configuration
-
-**lws** is configured using a `config.yaml` file. This file defines your environment settings, including regions, availability zones (AZs), instance sizes, network settings, security credentials, and ng parameters.
-
-#### Example `config.yaml`
-
+3. Create a configuration file `config.yaml` with your Proxmox server details:
 ```yaml
-use_local_only: false
-start_vmid: 10000
-default_storage: local-lvm
-default_network: vmbr0
-minimum_resources:
-  cores: 1
-  memory_mb: 512
-regions:  
+regions:
   eu-south-1:
     availability_zones:
       az1:
-        host: proxmox1.public-fqdn.com     # example: public FQDN (access must be secured)
+        host: proxmox1.example.com
         user: root
-        ssh_password: password
+        ssh_password: your_password
       az2:
-        host: 172.23.0.2                   # example: VPN address
+        host: proxmox2.example.com
         user: root
-        ssh_password: password
-      az3:
-        host: proxmox3.local               # example: local network
-        user: root
-        ssh_password: password
-      az4:
-        host: 192.168.0.4                  # example: LAN address
-        user: root
-        ssh_password: password
+        ssh_password: your_password
 
-  eu-central-1:
-    availability_zones:
-      pve-rhine:
-        host: pve-rhine.mydomain.com
-        user: root
-        ssh_password: password
-      pve-alps:
-        host: pve-alps.mydomain.com
-        user: root
-        ssh_password: password
+instance_sizes:
+  small:
+    memory: 512
+    cpulimit: 1
+    storage: local:8
+  medium:
+    memory: 1024
+    cpulimit: 2
+    storage: local:16
+  large:
+    memory: 2048
+    cpulimit: 4
+    storage: local:32
+
+default_storage: local
+default_network: vmbr0
+use_local_only: false
 ```
 
-> [!IMPORTANT]
-> Secure your `config.yaml` file to prevent exposure of sensitive information. Consider using tools like `ansible-vault` or environment variables for managing sensitive data securely.
+4. Make the script executable and create an alias:
+```bash
+chmod +x lws.py && alias lws='python3 /path/to/lws.py'
+```
+
+5. Verify the installation:
+```bash
+lws --version
+```
 
 ## Usage
 
-**lws** offers various commands for managing Proxmox VE, LXC containers, and Docker services. Below are detailed examples for each command set.
+### Proxmox Host Management
 
-### Proxmox Management
-
-Manage your Proxmox hosts and clusters with these commands. Use the `--region` and `--az` options to target specific regions and availability zones.
-
-#### List all Proxmox hosts
+#### List Proxmox Hosts
 ```bash
 lws px list
 ```
-> [!TIP]
-> Use the `list` command to quickly verify which Proxmox hosts are available for management in specific regions.
 
-#### Backup configurations of a Proxmox host in a region
+#### Check Host Status
 ```bash
-lws px backup --region eu-south-1
+lws px status --region eu-south-1 --az az1
 ```
 
-#### Backup a specific LXC container
+#### List Clusters
 ```bash
-lws px backup-lxc 101 --region eu-south-1 --az az1
+lws px clusters --region eu-south-1 --az az1
 ```
 
-#### Restart all cluster services in a specific AZ
+#### Backup Proxmox Configuration
 ```bash
-lws px cluster-restart --region eu-central-1 --az pve-rhine
+lws px backup /path/to/backup/directory --region eu-south-1 --az az1
 ```
 
-#### Create a template image from an LXC container
+#### Start/Stop/Restart Cluster Services
 ```bash
-lws px image-add 101 --region eu-central-1 --az pve-alps --template-name "my-template"
+lws px cluster-start --region eu-south-1 --az az1
+lws px cluster-stop --region eu-south-1 --az az1
+lws px cluster-restart --region eu-south-1 --az az1
 ```
 
-#### Delete a template image from a specific AZ
+#### Execute Command on Proxmox Host
 ```bash
-lws px image-rm --region eu-central-1 --az pve-rhine --template-name "my-template"
+lws px exec "free -m" --region eu-south-1 --az az1
 ```
 
-> [!WARNING]
-> Be careful when deleting images, as this action is irreversible and can result in data loss.
-
-#### Monitor resource usage of a Proxmox host
+#### Upload Template to Proxmox
 ```bash
-lws px status --region eu-south-1 --az az3
+lws px upload ./ubuntu-20.04-template.tar.gz ubuntu-20.04 --region eu-south-1 --az az1
 ```
-
-#### Reboot a Proxmox host in a specific AZ
-```bash
-lws px reboot --region eu-south-1 --az az2
-```
-
-> [!TIP]
-> Rebooting a Proxmox host will temporarily affect all services running on it. Ensure you plan this operation during maintenance windows.
 
 ### LXC Container Management
 
-Manage LXC containers with these versatile commands. Just specify the container ID and, optionally, the region and AZ.
-
-#### Start an LXC container
+#### Create and Start LXC Container
 ```bash
-lws lxc start 101 --region eu-central-1 --az pve-alps
+lws lxc run --image-id local:vztmpl/ubuntu-20.04-standard_20.04-1_amd64.tar.gz --size medium --count 3 --hostname web-server
 ```
 
-#### Stop a running LXC container
+#### Start/Stop/Reboot Container
 ```bash
-lws lxc stop 101 --region eu-central-1 --az pve-alps
+lws lxc start 100 101 102
+lws lxc stop 100 101 102
+lws lxc reboot 100
 ```
 
-#### Reboot an LXC container
+#### Show Container Details
 ```bash
-lws lxc reboot 101 --region eu-central-1 --az pve-alps
+lws lxc show 100
 ```
 
-#### Terminate (destroy) an LXC container
+#### Show All Containers
 ```bash
-lws lxc terminate 101 --region eu-central-1 --az pve-alps
+lws lxc show
 ```
 
-> [!WARNING]
-> The `terminate` command permanently deletes the LXC container. Use this with caution.
-
-#### Clone an LXC container locally or remotely
+#### Scale Container Resources
 ```bash
-lws lxc clone 101 102 --region eu-central-1 --az pve-alps
+lws lxc scale 100 --memory 2048 --cpulimit 2 --storage-size 32G
 ```
 
-#### Migrate an LXC container between AZs
+#### Monitor Container Resources
 ```bash
-lws lxc migrate 101 --region eu-central-1 --source-az pve-rhine --target-az pve-alps
+lws lxc status 100
 ```
 
-#### Execute a command inside an LXC container
+#### Execute Command in Container
 ```bash
-lws lxc exec 101 --region eu-central-1 --az pve-alps --command "apt-get update"
+lws lxc exec 100 "apt update && apt upgrade -y"
 ```
 
-#### Scale resources of an LXC container
+#### Create and Manage Snapshots
 ```bash
-lws lxc scale 101 --region eu-central-1 --az pve-alps --cpu 4 --memory 8192
+lws lxc snapshot-add 100 snap1
+lws lxc snapshots 100
+lws lxc snapshot-rm 100 snap1
 ```
 
-> [!TIP]
-> Scaling resources can help optimize performance but may also increase resource consumption on your host.
-
-#### Create a snapshot of an LXC container
+#### Check Network Connectivity
 ```bash
-lws lxc snapshot-add 101 --region eu-central-1 --az pve-alps --name "pre-update"
+lws lxc net 100 tcp 80
 ```
 
-#### List all snapshots of an LXC container
+#### Show Container Info and IP
 ```bash
-lws lxc show-snapshots 101 --region eu-central-1 --az pve-alps
+lws lxc show-info 100
+lws lxc show-public-ip 100
 ```
 
-#### Attach a storage volume to an LXC container
+#### Clone Container
 ```bash
-lws lxc volume-attach 101 --region eu-central-1 --az pve-alps --volume "my-volume"
+lws lxc clone 100 101 --full
 ```
 
-#### Retrieve the public IP address of an LXC container
+#### Scale Recommendations
 ```bash
-lws lxc show-public-ip 101 --region eu-central-1 --az pve-alps
+lws lxc scale-check 100
+```
+
+#### Manage Container Services
+```bash
+lws lxc service status nginx 100
+lws lxc service restart nginx 100
+```
+
+#### Advanced Health Check
+```bash
+lws lxc health-check 100 --fix
+```
+
+#### Resource Monitoring
+```bash
+lws lxc resources 100 --interval 5 --count 10
+```
+
+#### Generate Container Report
+```bash
+lws lxc report 100 --output json --file container_report.json
+```
+
+### Container Backups & Restores
+
+#### Create Container Backup
+```bash
+lws lxc backup-create 100 --download
+```
+
+#### Restore Container from Backup
+```bash
+lws lxc backup-restore 100 --backup-file backup-100-20230915-123456.tar.gz
 ```
 
 ### Docker Management
 
-Manage Docker services within LXC containers using these commands. Specify the container ID along with the region and AZ.
-
-#### Install Docker and Compose on an LXC container
+#### Install Docker on Container
 ```bash
-lws app setup 101 --region eu-south-1 --az az1
+lws app setup 100
 ```
 
-#### Deploy a Docker Compose application
+#### Run Docker Container
 ```bash
-lws app deploy 101 --region eu-south-1 --az az1 --compose-file docker-compose.yml
+lws app run 100 -d -p 80:80 nginx
 ```
 
-> [!TIP]
-> Ensure your `docker-compose.yml` file is correctly configured before deployment to avoid runtime issues.
-
-#### List Docker containers in an LXC container
+#### Deploy with Docker Compose
 ```bash
-lws app list 101 --region eu-south-1 --az az1
+lws app deploy install 100 --compose_file docker-compose.yml --auto_start
 ```
 
-#### Fetch Docker logs from an LXC container
+#### Update Docker Compose Application
 ```bash
-lws app logs 101 --region eu-south-1 --az az1 --container "my-container"
+lws app update 100 docker-compose.yml
 ```
 
-#### Update an app within an LXC container via Compose
+#### View Docker Logs
 ```bash
-lws app update 101 --region eu-south-1 --az az1
+lws app logs 100 nginx --follow
 ```
 
-> [!TIP]
-> Regularly updating your Docker containers ensures they are running the latest versions with security patches.
-
-### Client Configuration Management
-
-Manage your **lws** client configurations with these commands.
-
-#### Backup the current configuration to a file
+#### List Docker Containers
 ```bash
-lws conf backup --output backup-config.yaml
+lws app list 100
 ```
 
-#### Show the current configuration
+#### Remove Docker
 ```bash
-lws conf show
+lws app remove 100 --purge
 ```
 
-#### Validate the current configuration
+### Security Tools
+
+#### Perform Security Scan
 ```bash
-lws conf validate
+lws sec scan 100 --scan-type full
 ```
 
-> [!IMPORTANT]
-> Always validate your configuration after making changes to avoid runtime errors.
-
-### Managing Instance Profiles
-
-Instance profiles define the resource allocations (memory, CPU, storage) for different types of workloads. These can be customized for specific applications, ranging from general-purpose to specialized setups.
-
-#### Example Instance Profiles
-
-```yaml
-instance_sizes:
-  micro:
-    memory: 512 
-    cpulimit: 1 
-    storage: local-lvm:4  
-  small:
-    memory: 1024 
-    cpulimit: 1 
-    storage: local-lvm:8   
-  mid:
-    memory: 2048 
-    cpulimit: 2
-    storage: local-lvm:16  
-  large:
-    memory: 4096 
-    cpulimit: 2
-    storage: local-lvm:32   
-  x-large:
-    memory: 8192 
-    cpulimit: 4 
-    storage: local-lvm:64   
-  
-  # Specialized instance profiles for specific applications
-  lws-postgres:
-    memory: 4096  # 4 GB
-    cpulimit: 2   # 2 vCPUs
-    storage: local-lvm:40  # 40 GB of storage
-    # Example: PostgreSQL for relational database.
-
-  lws-redis:
-    memory: 2048  # 2 GB
-    cpulimit: 1   # 1 vCPU
-    storage: local-lvm:10  # 10 GB of storage
-    # Example: Redis for in-memory caching.
+#### Network Discovery
+```bash
+lws sec discovery 100
 ```
-
-> [!TIP]
-> Customize instance profiles based on the specific requirements of your applications. For example, databases like PostgreSQL may need more memory and CPU, while caching solutions like Redis can operate efficiently with fewer resources.
-
-### Managing Security Settings
-
-Security settings within **lws** control aspects like SSH timeouts, discovery methods, and the number of parallel workers. These settings help secure your environment while ensuring efficient operations.
-
-#### Example Security Configuration
-
-```yaml
-security:
-  discovery:
-    proxmox_timeout: 2  # Timeout in seconds for Proxmox host discovery
-    lxc_timeout: 2  # Timeout in seconds for LXC container discovery
-    discovery_methods: ['ping']  # Methods used for discovering resources
-    max_parallel_workers: 10  # Maximum number of parallel workers during discovery
-```
-
-> [!TIP]
-> Adjust the `max_parallel_workers` setting to optimize discovery operations based on your infrastructure's size and complexity.
 
 ### Managing Scaling Thresholds and Triggers
 
 Scaling thresholds and triggers allow **lws** to automatically adjust resources (CPU, memory, storage) for LXC containers based on defined conditions met on both the Proxmox host and the LXC container. This feature ensures optimal performance while preventing resource exhaustion.
 
 #### Example Scaling Configuration
-
 ```yaml
 scaling:
   host_cpu:
-    max_threshold: 80  # Maximum percentage of host CPU usage before scaling down
-    min_threshold: 30  # Minimum percentage of host CPU usage before scaling up
-    step: 1  # Base increment or decrement of CPU cores on the host
-    scale_up_multiplier: 1.5  # Multiplier applied to step size when scaling up
-    scale_down_multiplier: 0.5  # Multiplier applied to step size when scaling down
-
-  lxc_cpu:
-    max_threshold: 80  # Maximum percentage of LXC CPU usage before scaling down
-    min_threshold: 30  # Minimum percentage of LXC CPU usage before scaling up
-    step: 1  # Base increment or decrement of CPU cores in the LXC
-    scale_up_multiplier: 1.5  # Multiplier applied to step size when scaling up
-    scale_down_multiplier: 0.5  # Multiplier applied to step size when scaling down
-
+    high_threshold: 0.80
+    low_threshold: 0.20
+    check_interval_seconds: 60
+  
   host_memory:
-    max_threshold: 70  # Percentage of total memory on the host before scaling down
-    min_threshold: 40  # Percentage of total memory on the host before scaling up
-    step_mb: 256  # Base amount of memory in MB to increase or decrease
-    scale_up_multiplier: 1.25  # Multiplier applied to step size when scaling up
-    scale_down_multiplier: 0.75  # Multiplier applied to step size when scaling down
-
+    high_threshold: 0.85
+    low_threshold: 0.30
+    check_interval_seconds: 60
+  
+  lxc_cpu:
+    min_threshold: 0.30
+    max_threshold: 0.80
+    step: 1
+    scale_up_multiplier: 1.5
+    scale_down_multiplier: 0.5
+  
   lxc_memory:
-    max_threshold: 70  # Maximum percentage of LXC memory usage before scaling down
-    min_threshold: 40  # Minimum percentage of LXC memory usage before scaling up
-    step_mb: 256  # Base amount of memory in MB to increase or decrease
-    scale_up_multiplier: 1.25  # Multiplier applied to step size when scaling up
-    scale_down_multiplier: 0.75  # Multiplier applied to step size when scaling down
-
-  host_storage:
-    max_threshold: 85  # Maximum percentage of storage usage on the host before scaling down
-    min_threshold: 50  # Minimum percentage of storage usage on the host before scaling up
-    step_gb: 10  # Base increment or decrement of storage in GB
-    scale_up_multiplier: 1.5  # Multiplier applied to step size when scaling up
-    scale_down_multiplier: 0.5  # Multiplier applied to step size when scaling down
-
-  lxc_storage:
-    max_threshold: 85  # Maximum percentage of storage usage in the LXC before scaling down
-    min_threshold: 50  # Minimum percentage of storage usage in the LXC before scaling up
-    step_gb: 10  # Base increment or decrement of storage in GB
-    scale_up_multiplier: 1.5  # Multiplier applied to step size when scaling up
-    scale_down_multiplier: 0.5  # Multiplier applied to step size when scaling down
-
+    min_threshold: 0.40
+    max_threshold: 0.70
+    step_mb: 256
+    scale_up_multiplier: 1.25
+    scale_down_multiplier: 0.75
+  
   limits:
-    min_memory_mb: 512  # Minimum allowed memory for any LXC container
-    max_memory_mb: 32768  # Maximum allowed memory for any LXC container
-    min_cpu_cores: 1  # Minimum allowed CPU cores for any LXC container
-    max_cpu_cores: 16  # Maximum allowed CPU cores for any LXC container
-    min_storage_gb: 10  # Minimum allowed storage for any LXC container
-    max_storage_gb: 1024  # Maximum allowed storage for any LXC container
-
-  general:
-    scaling_interval: 5  # Interval in minutes to check for resource adjustments
-    notify_user: true  # Notify user via CLI output when scaling adjustments are made
-    dry_run: false  # If true, simulate scaling adjustments without applying changes
-    scaling_log_level: DEBUG  # Log level for scaling operations (DEBUG, INFO, WARN, ERROR)
-    use_custom_scaling_algorithms: false  # Enable if custom scaling algorithms are implemented
+    min_cpu_cores: 1
+    max_cpu_cores: 4
+    min_memory_mb: 512
+    max_memory_mb: 8192
+    min_storage_gb: 10
+    max_storage_gb: 500
+  
+  notifications:
+    notify_user: true
+    dry_run: true
 ```
 
 > [!TIP]
@@ -464,22 +391,19 @@ scaling:
 
 ## Security Considerations
 
-Given that **lws** involves sensitive operations and SSH connections, it's important to:
-
-- **Protect Your Configuration**: Ensure your `config.yaml` file is secure.
-- **Use in Non-Production Environments**: As **lws** is in its early stages, it's
-
- safer to use it in test or development environments.
-- **Use Secured Connections**: Always protect management communications with a VPN or similar secured connection.
-
-> [!WARNING]
-> Misconfigured SSH or insecure usage can lead to unauthorized access to your systems. Always follow best practices for SSH security.
+- **Secure Storage of Credentials**: Consider using environment variables or a secure key store instead of plaintext passwords in configuration files.
+- **Restricted Access**: Limit access to the configuration file containing sensitive credentials.
+- **Regular Security Scans**: Run `lws sec scan` regularly on your containers to detect security issues.
+- **Firewall Rules**: Use the security group functionality to restrict network access to containers.
+- **Update Regularly**: Keep your container images and software up to date.
 
 ## Best Practices
 
-- **Regular Backups**: Regularly back up your configuration and important data.
-- **Testing Before Use**: Thoroughly test **lws** commands in a non-production environment before applying them to critical systems.
-- **Keep Updated**: Keep your **lws** installation and dependencies updated to benefit from the latest features and fixes.
+- **Resource Planning**: Use `lws lxc scale-check` to get recommendations on optimal resource allocation.
+- **Regular Backups**: Create regular backups with `lws lxc backup-create` to prevent data loss.
+- **Monitoring**: Use `lws lxc resources` to monitor resource usage patterns.
+- **Health Checks**: Run `lws lxc health-check` periodically to detect and fix issues.
+- **Documentation**: Generate reports with `lws lxc report` for documentation and auditing purposes.
 
 ## Contributing
 
@@ -500,11 +424,14 @@ Given that **lws** involves sensitive operations and SSH connections, it's impor
 
 ## Roadmap
 
-**lws** is still in its infancy. Planned features and improvements include:
+**lws** continues to evolve. Planned features and improvements include:
 
-- **Improved Error Handling**: More robust error handling and feedback mechanisms.
-- **Additional Commands**: Expanding the set of management commands.
-- **User Interface Improvements**: Enhanced user experience with better output formatting and additional CLI options.
+- **Multi-Factor Authentication**: Support for MFA in SSH connections.
+- **Web Interface**: A simple web dashboard for visual management.
+- **Configuration Versioning**: Track changes to container configurations.
+- **Integration with CI/CD Pipelines**: Make lws part of your deployment workflows.
+- **Kubernetes Support**: Expand management capabilities to Kubernetes clusters.
+- **More Security Tools**: Additional security scanning and threat detection tools.
 
 ## License
 
@@ -512,12 +439,6 @@ This project is licensed under the MIT License. See the [LICENSE](LICENSE) file 
 
 ## Acknowledgements
 
-- **Proxmox VE**: The powerful virtualization platform that inspired this project.
-- **LXC**: For making Linux containers a reality.
-- **Docker**: For making container management simpler and more efficient.
-- **Open Source Community**: For the tools and libraries that made this project possible.
-
----
-
-> [!WARNING]
-> **Disclaimer**: **lws** is a project created for fun and exploration. It is not intended for production use, and users should exercise caution when using it on live systems. Always test thoroughly in a non-production environment.
+- The Proxmox team for their excellent virtualization platform
+- The Click developers for the wonderful CLI framework
+- All contributors who have helped improve this tool
