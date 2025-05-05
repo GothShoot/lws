@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Add Font Awesome for icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" integrity="sha512-9usAa10IRO0HhonpyAIVpjrylPvoDwiPUiKdWk5t3PyolY1cOd4DSE0Ga+ri4AuTroPR5aQvXU9xC6qOPnzFeg==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+    <!-- 
+        NOTE: For API calls to work correctly due to browser security (CORS), 
+        it's recommended to serve this HTML file using a local web server 
+        (e.g., python -m http.server 8000) and access it via http://localhost:8000/ui.html,
+        rather than opening it directly as a file (file:///...).
+        Alternatively, ensure the API's CORS configuration allows 'null' origin.
+    -->
+    <title>LWS API Interface</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            margin: 20px;
+            background-color: #f4f4f4;
+            display: flex;
+            justify-content: center;
+        }
+        .container {
+            background-color: #fff;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+            width: 80%;
+            max-width: 900px;
+        }
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: bold;
+            color: #333;
+        }
+        input[type="text"], input[type="password"] {
+            width: calc(100% - 24px); /* Account for padding */
+            padding: 12px;
+            margin-bottom: 20px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 1rem;
+        }
+        .button-group {
+            margin-bottom: 20px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid #eee;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            padding: 10px 18px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-right: 10px;
+            margin-bottom: 10px;
+            font-size: 0.95rem;
+            transition: background-color 0.2s ease;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        button i { /* Style for icons inside buttons */
+            margin-right: 5px;
+        }
+        #responseContainer {
+            margin-top: 20px;
+        }
+        #loadingIndicator {
+            display: none; /* Hidden by default */
+            text-align: center;
+            padding: 20px;
+            color: #555;
+        }
+        #loadingIndicator i {
+            margin-right: 10px;
+        }
+        #responseArea {
+            padding: 15px;
+            background-color: #e9ecef;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            white-space: pre-wrap; /* Preserve formatting */
+            word-wrap: break-word; /* Break long lines */
+            max-height: 500px;
+            overflow-y: auto;
+            font-family: monospace; /* Better for JSON */
+            font-size: 0.9rem;
+            line-height: 1.4;
+        }
+        .response-success {
+            border-left: 5px solid #28a745; /* Green border for success */
+            background-color: #f0fff4;
+        }
+        .response-error {
+            border-left: 5px solid #dc3545; /* Red border for error */
+            background-color: #fff5f5;
+            color: #721c24;
+        }
+        .response-message {
+            padding: 10px 15px;
+            margin-bottom: 10px;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+        .response-message.success {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .response-message.error {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .response-message i {
+            margin-right: 8px;
+        }
+        h2 {
+            margin-top: 30px;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 10px;
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1><i class="fas fa-terminal"></i> LWS API Interface</h1>
+
+        <div>
+            <label for="apiKey"><i class="fas fa-key"></i> API Key:</label>
+            <input type="password" id="apiKey" placeholder="Enter your API Key">
+        </div>
+
+        <div class="button-group">
+            <button id="btnHealthCheck"><i class="fas fa-heartbeat"></i> API Health</button>
+            <button id="btnListHosts"><i class="fas fa-server"></i> List Hosts</button>
+            <button id="btnListInstances"><i class="fas fa-cube"></i> List Instances</button>
+            <!-- Add more buttons for other endpoints as needed -->
+        </div>
+        <div class="button-group">
+             <label for="instanceIdInput"><i class="fas fa-hashtag"></i> Instance ID:</label>
+             <input type="text" id="instanceIdInput" placeholder="Instance ID for specific actions">
+             <button id="btnDescribeInstance"><i class="fas fa-info-circle"></i> Describe Instance</button>
+             <!-- Add more instance-specific buttons here -->
+        </div>
+
+
+        <h2><i class="fas fa-receipt"></i> Response / Output</h2>
+        <div id="responseContainer">
+            <div id="loadingIndicator">
+                <i class="fas fa-spinner fa-spin"></i> Loading...
+            </div>
+            <div id="responseArea">API responses will appear here...</div>
+        </div>
+    </div>
+
+    <script>
+        const apiKeyInput = document.getElementById('apiKey');
+        const responseArea = document.getElementById('responseArea');
+        const loadingIndicator = document.getElementById('loadingIndicator');
+        const instanceIdInput = document.getElementById('instanceIdInput');
+        const apiBaseUrl = '/api/v1'; // Use relative path
+
+        async function callApi(endpoint, method = 'GET', body = null) {
+            const apiKey = apiKeyInput.value;
+            loadingIndicator.style.display = 'block'; // Show loading
+            responseArea.innerHTML = ''; // Clear previous response
+            responseArea.classList.remove('response-success', 'response-error'); // Reset styles
+
+            const headers = {
+                'Accept': 'application/json',
+            };
+            if (apiKey) {
+                headers['X-API-Key'] = apiKey;
+            }
+            if (body && (method === 'POST' || method === 'PUT' || method === 'DELETE')) { // Include DELETE
+                headers['Content-Type'] = 'application/json';
+            }
+
+            const options = {
+                method: method,
+                headers: headers,
+            };
+            if (body) {
+                options.body = JSON.stringify(body);
+            }
+
+            try {
+                const response = await fetch(`${apiBaseUrl}${endpoint}`, options);
+                const data = await response.json(); // Assume JSON response
+
+                loadingIndicator.style.display = 'none'; // Hide loading
+
+                if (!response.ok) {
+                    // Handle HTTP errors (4xx, 5xx) which usually return JSON error details
+                    const errorMsg = `HTTP error! Status: ${response.status} - ${data.name || 'Error'}: ${data.description || data.message || JSON.stringify(data)}`;
+                    throw new Error(errorMsg);
+                }
+
+                // Success
+                responseArea.classList.add('response-success');
+                // Display a success message and the formatted JSON data
+                responseArea.innerHTML = `
+                    <div class="response-message success">
+                        <i class="fas fa-check-circle"></i> Success (Status: ${response.status})
+                    </div>
+                    <pre>${JSON.stringify(data, null, 2)}</pre>
+                `;
+
+            } catch (error) {
+                // Handle fetch errors (network issues) or errors thrown above
+                console.error('API Call Error:', error);
+                loadingIndicator.style.display = 'none'; // Hide loading
+                responseArea.classList.add('response-error');
+                // Display an error message
+                responseArea.innerHTML = `
+                    <div class="response-message error">
+                        <i class="fas fa-exclamation-triangle"></i> Error
+                    </div>
+                    <pre>${error.message}</pre>
+                `;
+            }
+        }
+
+        // --- Event Listeners ---
+        document.getElementById('btnListHosts').addEventListener('click', () => {
+            callApi('/px/hosts');
+        });
+
+        document.getElementById('btnListInstances').addEventListener('click', () => {
+            callApi('/lxc/instances');
+        });
+
+        document.getElementById('btnHealthCheck').addEventListener('click', () => {
+            callApi('/health'); // No API key needed for health check usually
+        });
+
+        document.getElementById('btnDescribeInstance').addEventListener('click', () => {
+            const instanceId = instanceIdInput.value.trim();
+            if (!instanceId) {
+                responseArea.innerHTML = `
+                    <div class="response-message error">
+                        <i class="fas fa-exclamation-triangle"></i> Error
+                    </div>
+                    <pre>Please enter an Instance ID.</pre>
+                `;
+                responseArea.classList.add('response-error');
+                return;
+            }
+            callApi(`/lxc/instances/${instanceId}`);
+        });
+
+        // Add more event listeners for other buttons...
+
+    </script>
+</body>
+</html>

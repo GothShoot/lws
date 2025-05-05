@@ -13,8 +13,9 @@ api:
   port: 8080           # Default port for the API server
   debug: false         # Set to true for development only
   log_level: "INFO"    # Log level (DEBUG, INFO, WARNING, ERROR)
-  allowed_origins:     # CORS allowed origins
-    - "http://localhost:8080"
+  allowed_origins:     # Example: Allow localhost server and file:// origin
+    - "http://localhost:8080" # If serving ui.html via python http.server
+    - "null" # For file:// access (use with caution)
 
 regions:  
   eu-south-1:

@@ -16,14 +16,12 @@ from functools import wraps
 import shlex # Import shlex for safe command splitting
 
 # Import Flask and related extensions
-from flask import Flask, request, jsonify, Response, abort
+from flask import Flask, request, jsonify, Response, abort, send_from_directory # Added send_from_directory
 from flask_cors import CORS
 from werkzeug.exceptions import HTTPException
 
 # Create Flask application
 app = Flask(__name__)
-CORS(app)  # Enable CORS for all routes
-
 # --- Configuration Loading ---
 def load_api_config():
     """Loads configuration from config.yaml."""
@@ -47,6 +45,12 @@ if not config:
 API_KEY = config.get('api_key', None)
 API_CONFIG = config.get('api', {})
 LWS_SCRIPT_PATH = os.path.join(os.path.dirname(__file__), 'lws.py') # Path to lws.py
+
+# --- CORS Configuration ---
+allowed_origins = API_CONFIG.get('allowed_origins', '*') # Default to allow all if not specified
+# If allowing specific origins, consider adding 'null' for file:// access during development
+# Example: allowed_origins = ["http://localhost:8000", "null"]
+CORS(app, origins=allowed_origins) # Apply CORS settings
 
 if not API_KEY:
     logging.warning("API key is not set in config.yaml. API will be insecure.")
@@ -186,6 +190,13 @@ def format_response(stdout, stderr, return_code):
         }), 500 # Use 500 for internal/execution errors
 
 # --- API Endpoints ---
+
+# --- Serve UI ---
+@app.route('/', methods=['GET'])
+def serve_ui():
+    """Serves the ui.html file."""
+    # Assumes ui.html is in the same directory as api.py
+    return send_from_directory(os.path.dirname(__file__), 'ui.html')
 
 # --- Health Check ---
 @app.route('/api/v1/health', methods=['GET'])
