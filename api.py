@@ -16,9 +16,11 @@ from functools import wraps
 import shlex # Import shlex for safe command splitting
 
 # Import Flask and related extensions
-from flask import Flask, request, jsonify, Response, abort, send_from_directory # Added send_from_directory
+from flask import Flask, request, jsonify, Response, abort, send_from_directory, url_for # Added url_for
 from flask_cors import CORS
 from werkzeug.exceptions import HTTPException
+# Import Swagger UI
+from flask_swagger_ui import get_swaggerui_blueprint
 
 # Create Flask application
 app = Flask(__name__)
@@ -188,6 +190,102 @@ def format_response(stdout, stderr, return_code):
             "output": stdout.strip() if stdout else "",
             "return_code": return_code
         }), 500 # Use 500 for internal/execution errors
+
+# --- Swagger UI Configuration ---
+SWAGGER_URL = '/api/v1/docs'  # URL for exposing Swagger UI (without trailing '/')
+API_URL = '/api/v1/swagger.json'  # URL for your OpenAPI spec
+
+# Call factory function to create our blueprint
+swaggerui_blueprint = get_swaggerui_blueprint(
+    SWAGGER_URL,
+    API_URL,
+    config={  # Swagger UI config overrides
+        'app_name': "LWS API"
+    }
+)
+
+# Register blueprint at URL
+app.register_blueprint(swaggerui_blueprint)
+
+# --- Minimal OpenAPI Spec ---
+@app.route('/api/v1/swagger.json')
+def swagger_spec():
+    """Serves the OpenAPI specification (dynamically generated skeleton)."""
+    # NOTE: This dynamically generates path skeletons but lacks details.
+    # Manual completion or using libraries like apispec/flasgger is recommended for full documentation.
+    spec = {
+        "openapi": "3.0.0",
+        "info": {
+            "title": "LWS API",
+            "version": "1.0.0",
+            "description": "API for managing Linux Web Services (LXC on Proxmox)"
+        },
+        "servers": [
+            # Determine server URL dynamically if needed, or keep relative
+             {"url": request.host_url.rstrip('/') + url_for('serve_ui').rstrip('/') + '/api/v1'}
+             # Or simply use relative: {"url": "/api/v1"}
+        ],
+        "paths": {}, # Initialize empty paths
+        "components": {
+            "securitySchemes": {
+                "ApiKeyAuth": {
+                    "type": "apiKey",
+                    "in": "header",
+                    "name": "X-API-Key"
+                }
+            }
+        },
+        "security": [ # Default security for most endpoints
+            {"ApiKeyAuth": []}
+        ]
+    }
+
+    # Dynamically populate paths from Flask routes
+    ignore_methods = {"HEAD", "OPTIONS"}
+    # Exclude static routes and swagger routes
+    excluded_endpoints = ['static', 'swagger_ui.show', 'swagger_spec']
+
+    for rule in app.url_map.iter_rules():
+        if rule.endpoint in excluded_endpoints:
+            continue
+
+        # Convert path parameters from <type:name> to {name}
+        path = rule.rule.replace('<', '{').replace('>', '}').replace('string:', '').replace('int:', '')
+
+        # Ensure path starts relative to /api/v1 if needed, or adjust server URL
+        # For simplicity, assuming paths are correctly prefixed or server URL handles it.
+
+        if path not in spec['paths']:
+            spec['paths'][path] = {}
+
+        methods = [m for m in rule.methods if m not in ignore_methods]
+        for method in methods:
+            # Basic placeholder structure - NEEDS MANUAL COMPLETION
+            spec['paths'][path][method.lower()] = {
+                "summary": f"Placeholder for {rule.endpoint}",
+                "description": f"TODO: Describe the {method} operation for {path}",
+                "tags": [rule.endpoint.split('.')[0] if '.' in rule.endpoint else 'default'], # Basic tagging
+                "parameters": [
+                    # TODO: Add path parameters like {instance_id} here manually or via introspection
+                    # Example: {"name": "instance_id", "in": "path", "required": True, "schema": {"type": "string"}}
+                ],
+                # TODO: Add requestBody for POST/PUT manually
+                # TODO: Add detailed responses manually
+                "responses": {
+                    "200": {"description": "TODO: Describe success response"},
+                    "400": {"description": "TODO: Describe bad request response"},
+                    "401": {"description": "Unauthorized (if require_api_key is used)"},
+                    "404": {"description": "TODO: Describe not found response"},
+                    "500": {"description": "Command execution failed or Internal Server Error"}
+                }
+            }
+            # Apply default security if not the health check
+            if rule.endpoint != 'health_check':
+                 spec['paths'][path][method.lower()]['security'] = [{"ApiKeyAuth": []}]
+
+
+    return jsonify(spec)
+
 
 # --- API Endpoints ---
 
