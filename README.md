@@ -1,6 +1,14 @@
-# lws
+# LWS - Linux Web Services CLI
 
-**lws** is a Command-Line Interface (CLI) tool designed to streamline the management of Proxmox Virtual Environments (VE), LXC containers, and Docker services through a unified, efficient interface.
+**Version:** 1.1.0
+
+LWS is a command-line interface (CLI) tool designed to simplify the management of LXC containers on Proxmox VE hosts. It provides a convenient way to perform common tasks such as creating, starting, stopping, terminating, and managing LXC instances, as well as interacting with Proxmox hosts themselves.
+
+Recently, LWS has been expanded to include:
+
+*   **A RESTful API:** Provides programmatic access to LWS functionality over HTTP.
+*   **A Simple Web UI:** Offers a basic graphical interface to interact with the API.
+*   **Swagger Documentation:** Interactive API documentation generated via Swagger UI.
 
 [![asciicast](https://asciinema.org/a/8rE7H67VjQ15HQ9KtsJVMRR4O.svg)](https://asciinema.org/a/8rE7H67VjQ15HQ9KtsJVMRR4O)
 
@@ -16,6 +24,9 @@
   - [Monitoring & Reporting](#monitoring--reporting)
   - [Security Tools](#security-tools)
   - [Managing Scaling Thresholds and Triggers](#managing-scaling-thresholds-and-triggers)
+  - [API Server](#api-server)
+  - [Web UI](#web-ui)
+  - [Swagger Documentation](#swagger-documentation)
 - [Security Considerations](#security-considerations)
 - [Best Practices](#best-practices)
 - [Contributing](#contributing)
@@ -388,6 +399,45 @@ scaling:
 
 > [!WARNING]
 > Be cautious when setting the `dry_run` option to `false`, as real scaling adjustments will be applied. Ensure your thresholds and multipliers are well-tested before applying them in production.
+
+### API Server
+
+The API server provides HTTP access to LWS functions.
+
+1.  **Ensure `config.yaml` is configured**, especially `api_key`, `api.host`, and `api.port`.
+2.  **Run the API server:**
+    ```bash
+    python3 api.py
+    ```
+    The server will start, typically listening on `0.0.0.0:8080` (or as configured).
+
+3.  **Interact with the API:** Use tools like `curl`, Postman, or the provided Web UI. Remember to include the API key in the `X-API-Key` header for protected endpoints.
+
+    ```bash
+    # Example: Health Check (no API key needed)
+    curl http://localhost:8080/api/v1/health
+
+    # Example: List LXC Instances (requires API key)
+    curl -H "X-API-Key: your-secure-api-key" http://localhost:8080/api/v1/lxc/instances
+    ```
+
+### Web UI
+
+A simple web interface is provided to interact with the API.
+
+1.  **Ensure the API server (`api.py`) is running.**
+2.  **Access the UI:**
+    *   Navigate your browser to the root URL of the running API server (e.g., `http://localhost:8080/`). The API server serves `ui.html` directly.
+    *   Alternatively, open the `ui.html` file directly in your browser (`file:///.../ui.html`). **Note:** Direct file access might cause CORS issues when making API calls, depending on your browser and the API's `allowed_origins` configuration in `config.yaml`. Serving the UI via the API is recommended.
+3.  **Enter your API Key** in the input field and use the buttons to trigger API calls. Responses will be displayed in a formatted view.
+
+### Swagger Documentation
+
+Interactive API documentation is available via Swagger UI.
+
+1.  **Ensure the API server (`api.py`) is running.**
+2.  **Access Swagger UI:** Navigate your browser to `/api/v1/docs` relative to the API server's URL (e.g., `http://localhost:8080/api/v1/docs`).
+3.  You can explore the available endpoints, view parameters, and even try API calls directly from the Swagger interface (remember to authorize using your API key via the "Authorize" button).
 
 ## Security Considerations
 
