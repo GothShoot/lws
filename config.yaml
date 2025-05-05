@@ -5,6 +5,17 @@ default_network: vmbr0
 minimum_resources:
   cores: 1
   memory_mb: 512
+
+# API configuration
+api_key: "my-secure-api-key"  # Replace with a strong, random API key
+api:
+  host: "0.0.0.0"      # Listen on all interfaces
+  port: 8080           # Default port for the API server
+  debug: false         # Set to true for development only
+  log_level: "INFO"    # Log level (DEBUG, INFO, WARNING, ERROR)
+  allowed_origins:     # CORS allowed origins
+    - "http://localhost:8080"
+
 regions:  
   eu-south-1:
     availability_zones:
