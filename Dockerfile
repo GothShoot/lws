@@ -8,6 +8,6 @@ WORKDIR /app
 
 RUN pip install -r requirements.txt
 
-RUN chmod +x lws.py && alias lws='python3 ./lws.py'
+RUN chmod +x lws.py && \
 
 CMD python3 api.py
