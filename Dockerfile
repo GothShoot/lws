@@ -1,6 +1,6 @@
 FROM ubuntu:lts
 
-RUN apt update && apt dist-upgrade -y
+RUN apt update && apt dist-upgrade -y && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 COPY ./* /app
 
