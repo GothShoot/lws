@@ -4,8 +4,6 @@ RUN apt update && apt dist-upgrade -y && apt-get clean && rm -rf /var/lib/apt/li
 
 COPY requirements.txt lws.py api.py /app/
 
-VOLUME ./config.yaml /app/config.yaml
-
 WORKDIR /app
 
 RUN pip install -r requirements.txt
