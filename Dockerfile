@@ -2,7 +2,7 @@ FROM ubuntu:lts
 
 RUN apt update && apt dist-upgrade -y && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-COPY ./* /app
+COPY requirements.txt lws.py api.py /app/
 
 VOLUME ./config.yaml /app/config.yaml
 
