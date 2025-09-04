@@ -1,4 +1,4 @@
-FROM ubuntu:lts
+FROM python:3.11-slim
 
 RUN apt update && apt dist-upgrade -y && apt-get clean && rm -rf /var/lib/apt/lists/*
 
